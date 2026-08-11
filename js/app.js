@@ -92,6 +92,7 @@ const state = {
   sourceDxfText: '',
   sourceSyncId: '',
   sourceSyncUploads: new Set(),
+  syncUploadPromise: null,
   sourceFileName: 'roof tile with area hatched.dxf',
   projectId: null,
   projectName: '',
@@ -812,7 +813,7 @@ async function downloadSourceSync(syncKey, sourceId) {
   };
 }
 
-async function uploadSync({ quiet = false } = {}) {
+async function runUploadSync({ quiet = false } = {}) {
   const syncKey = readSyncKey();
   if (!syncKey) {
     if (!quiet) toast('請先輸入同步碼。', 'warning');
@@ -844,6 +845,16 @@ async function uploadSync({ quiet = false } = {}) {
     if (!quiet) toast(`雲端上傳失敗：${error.message}`, 'error');
     return false;
   }
+}
+
+function uploadSync(options = {}) {
+  if (state.syncUploadPromise) return state.syncUploadPromise;
+  const task = runUploadSync(options);
+  state.syncUploadPromise = task.finally(() => {
+    if (state.syncUploadPromise === wrappedTask) state.syncUploadPromise = null;
+  });
+  const wrappedTask = state.syncUploadPromise;
+  return wrappedTask;
 }
 
 async function downloadSync() {
