@@ -75,6 +75,12 @@ button { cursor: pointer; }
 .source-summary span { color: var(--muted); font-size: 10px; margin-top: 3px; }
 .project-box { margin-top: 10px; padding: 9px; border: 1px solid #c9ddec; border-radius: 9px; background: #f4f9fd; }
 .project-box select { margin-top: 7px; }
+.recovery-box { margin-top: 9px; padding: 9px; border: 1px solid #e4bb69; border-radius: 9px; background: #fff7e6; color: #694b16; }
+.recovery-box strong, .recovery-box span { display: block; }
+.recovery-box strong { font-size: 11px; }
+.recovery-box span { margin-top: 4px; font-size: 9px; line-height: 1.45; }
+.recovery-actions { display: flex; gap: 6px; margin-top: 7px; }
+.recovery-actions .button { flex: 1; min-width: 0; }
 .project-actions { display: grid; grid-template-columns: 1.2fr .8fr .8fr; gap: 6px; margin-top: 7px; }
 .project-actions .button { min-width: 0; }
 .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; margin-top: 10px; }
