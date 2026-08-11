@@ -84,7 +84,7 @@ const PROJECTS_FALLBACK_KEY = 'roof-tile-layout:projects:v1';
 const PROJECT_MAX_COUNT = 50;
 const BACKUP_SCHEMA_VERSION = 1;
 // Keep the base64 request comfortably below the Worker/D1 request limit on iPad Safari.
-const SOURCE_CHUNK_BYTES = 200000;
+const SOURCE_CHUNK_BYTES = 400000;
 
 const state = {
   qa: null,
