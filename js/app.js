@@ -83,11 +83,14 @@ const PROJECTS_STORE_NAME = 'projects';
 const PROJECTS_FALLBACK_KEY = 'roof-tile-layout:projects:v1';
 const PROJECT_MAX_COUNT = 50;
 const BACKUP_SCHEMA_VERSION = 1;
+const SOURCE_CHUNK_BYTES = 300000;
 
 const state = {
   qa: null,
   cad: null,
   sourceDxfText: '',
+  sourceSyncId: '',
+  sourceSyncUploads: new Set(),
   sourceFileName: 'roof tile with area hatched.dxf',
   projectId: null,
   projectName: '',
@@ -262,6 +265,7 @@ function snapshotProject({ includeSource = false } = {}) {
     version: 5,
     projectType: 'roof-tile-layout',
     sourceFileName: state.sourceFileName,
+    sourceSyncId: state.sourceSyncId || '',
     sourceMode: state.sourceMode,
     sourceRegionCount: currentSourceRegionCount(),
     hatchObjectCount: inferredHatchObjectCount,
@@ -546,6 +550,21 @@ async function switchProject(projectId) {
     } else if (project.cad) {
       state.cad = cloneProjectData(project.cad);
       state.sourceFileName = project.sourceFileName || state.sourceFileName;
+    } else if (project.sourceSyncId && readSyncKey()) {
+      const source = await downloadSourceSync(readSyncKey(), project.sourceSyncId);
+      if (source?.sourceDxfText) {
+        await loadCadBuffer(new TextEncoder().encode(source.sourceDxfText).buffer, source.sourceFileName || project.sourceFileName, {
+          initial: false,
+          restoreAuto: false,
+          activateProject: false,
+          skipProjectPersist: true
+        });
+        state.sourceSyncId = source.sourceId;
+        state.sourceSyncUploads.add(sourceSyncCacheKey(readSyncKey(), source.sourceId));
+      } else {
+        state.cad = null;
+        state.sourceFileName = project.sourceFileName || state.sourceFileName;
+      }
     } else {
       state.cad = null;
       state.sourceFileName = project.sourceFileName || state.sourceFileName;
@@ -704,6 +723,81 @@ async function syncRequest(action, syncKey, payload = null) {
   return result;
 }
 
+function sourceSyncCacheKey(syncKey, sourceId) {
+  return `${syncKey}:${sourceId}`;
+}
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  const step = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += step) {
+    binary += String.fromCharCode(...bytes.subarray(offset, Math.min(offset + step, bytes.length)));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(String(value || ''));
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function prepareSourceSync() {
+  if (!state.sourceDxfText) return null;
+  const bytes = new TextEncoder().encode(state.sourceDxfText);
+  const sourceId = state.sourceSyncId || await sha256Hex(bytes);
+  state.sourceSyncId = sourceId;
+  return { sourceId, bytes, sourceFileName: state.sourceFileName };
+}
+
+async function uploadSourceSync(syncKey, sourceInfo) {
+  if (!sourceInfo?.bytes?.length) return;
+  const cacheKey = sourceSyncCacheKey(syncKey, sourceInfo.sourceId);
+  if (state.sourceSyncUploads.has(cacheKey)) return;
+  const chunkCount = Math.ceil(sourceInfo.bytes.length / SOURCE_CHUNK_BYTES);
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * SOURCE_CHUNK_BYTES;
+    const chunk = sourceInfo.bytes.subarray(start, Math.min(start + SOURCE_CHUNK_BYTES, sourceInfo.bytes.length));
+    await syncRequest('put-source', syncKey, {
+      sourceId: sourceInfo.sourceId,
+      sourceFileName: sourceInfo.sourceFileName,
+      chunkIndex,
+      chunkCount,
+      data: bytesToBase64(chunk)
+    });
+  }
+  state.sourceSyncUploads.add(cacheKey);
+}
+
+async function downloadSourceSync(syncKey, sourceId) {
+  if (!sourceId) return null;
+  const first = await syncRequest('get-source', syncKey, { sourceId, chunkIndex: 0 });
+  const chunkCount = Math.max(1, Number(first.chunkCount || 1));
+  const chunks = [base64ToBytes(first.data)];
+  for (let chunkIndex = 1; chunkIndex < chunkCount; chunkIndex += 1) {
+    const result = await syncRequest('get-source', syncKey, { sourceId, chunkIndex });
+    chunks.push(base64ToBytes(result.data));
+  }
+  const totalBytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return {
+    sourceId,
+    sourceFileName: first.sourceFileName || '',
+    sourceDxfText: new TextDecoder().decode(bytes)
+  };
+}
+
 async function uploadSync({ quiet = false } = {}) {
   const syncKey = readSyncKey();
   if (!syncKey) {
@@ -718,6 +812,11 @@ async function uploadSync({ quiet = false } = {}) {
   setSyncStatus('上傳中…');
   try {
     await persistActiveProject({ includeSource: false, sync: false });
+    const sourceInfo = await prepareSourceSync();
+    if (sourceInfo) {
+      await uploadSourceSync(syncKey, sourceInfo);
+      await persistActiveProject({ includeSource: false, sync: false });
+    }
     const payload = buildSyncBundle();
     const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
     if (size > 900000) throw new Error('同步資料超過雲端單次保存上限，請使用導出 JSON 備份。');
@@ -747,13 +846,32 @@ async function downloadSync() {
     pushHistory();
     if (Array.isArray(payload.projects)) await mergeSyncedProjects(payload.projects);
     if (payload.namedVersions && typeof payload.namedVersions === 'object') writeNamedVersions(payload.namedVersions, { sync: false });
+    let restoredSource = false;
+    if (project.sourceSyncId) {
+      try {
+        const source = await downloadSourceSync(syncKey, project.sourceSyncId);
+        if (source?.sourceDxfText) {
+          await loadCadBuffer(new TextEncoder().encode(source.sourceDxfText).buffer, source.sourceFileName || project.sourceFileName, {
+            initial: false,
+            restoreAuto: false,
+            activateProject: false,
+            skipProjectPersist: true
+          });
+          state.sourceSyncId = source.sourceId;
+          state.sourceSyncUploads.add(sourceSyncCacheKey(syncKey, source.sourceId));
+          restoredSource = true;
+        }
+      } catch (sourceError) {
+        console.warn('Unable to restore synced CAD background', sourceError);
+      }
+    }
     const sameSource = String(project.sourceFileName || '') === String(state.sourceFileName || '')
       && Number(project.sourceRegionCount || 0) === currentSourceRegionCount();
-    restoreProject(project, sameSource);
+    restoreProject(project, restoredSource || sameSource);
     const syncedProject = state.projectCatalog.find((item) => item.id === payload.activeProjectId);
     state.projectId = syncedProject?.id || state.projectId;
     state.projectName = syncedProject?.name || state.projectName || projectNameFromFile(project.sourceFileName);
-    if (state.projectId) await persistActiveProject({ includeSource: sameSource, sync: false });
+    if (state.projectId) await persistActiveProject({ includeSource: restoredSource || sameSource, sync: false });
     renderNamedVersions();
     scheduleAutoSave();
     const updatedAt = payload.updatedAt || result.updatedAt;
@@ -989,6 +1107,7 @@ function restoreProject(project, keepCad = true) {
     };
   });
   state.sourceRegionCount = Number(project.sourceRegionCount || state.regions.length || 0);
+  state.sourceSyncId = String(project.sourceSyncId || '');
   state.sourceMode = project.sourceMode || (state.cad ? 'hatch' : 'cloud');
   state.hatchObjectCount = Number(project.hatchObjectCount ?? state.hatchObjectCount ?? 0);
   state.hatchHoleCount = Number(project.hatchHoleCount ?? state.hatchHoleCount ?? 0);
@@ -3087,6 +3206,7 @@ async function loadCadBuffer(arrayBuffer, fileName, {
     if (!initial && !skipProjectPersist) await persistActiveProject({ includeSource: true, sync: false });
     const sourceFormat = String(fileName).toLowerCase().endsWith('.dxf') ? 'DXF' : 'DWG';
     state.sourceDxfText = sourceFormat === 'DXF' ? new TextDecoder('utf-8').decode(arrayBuffer) : '';
+    state.sourceSyncId = '';
     setSourceBadge(`${sourceFormat} 解析中`, 'loading');
     dom.calculationBadge.textContent = '解析 CAD'; dom.calculationBadge.className = 'calculation-badge busy';
     const cad = await parseCadFile(arrayBuffer, fileName, (message) => { dom.sourceDetail.textContent = message; });
