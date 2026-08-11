@@ -53,6 +53,14 @@
           <p class="helper-text">每張圖紙都是獨立 project；匯入新 DWG／DXF 不會覆蓋舊 project。此裝置最多保存 50 個 project，實際仍受 iPad 瀏覽器可用儲存空間影響。</p>
         </div>
         <div id="sourceNotice" class="notice info">先顯示 QA 後備區域；DXF 載入後以標定 HATCH 作為鋪磚範圍，再用嚴格的20 mm伸縮縫規則切成最小排磚倉。</div>
+        <div id="recoveryBox" class="recovery-box" hidden>
+          <strong>發現未完成保存版本</strong>
+          <span id="recoveryText">可恢復上次 crash 前的排布。</span>
+          <div class="recovery-actions">
+            <button id="recoverLatestButton" class="button mini primary" type="button">恢復最近版本</button>
+            <button id="dismissRecoveryButton" class="button mini" type="button">忽略</button>
+          </div>
+        </div>
         <div class="version-box">
           <div class="version-box-title"><strong>命名版本</strong><span id="versionStatus">0 個已保存版本</span></div>
           <select id="savedVersionSelect" aria-label="已保存版本"><option value="">選擇已保存版本</option></select>
@@ -308,6 +316,6 @@
 
   <button id="helpButton" class="floating-help" title="使用說明">?</button>
   <div id="toastContainer" class="toast-container"></div>
-  <script type="module" src="js/app.js?v=20260811-sync-project-merge7"></script>
+  <script type="module" src="js/app.js?v=20260811-sync-project-recovery8"></script>
 </body>
 </html>
