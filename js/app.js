@@ -314,19 +314,50 @@ function uniqueProjectName(name) {
   return `${requested} (${Date.now()})`;
 }
 
+function normalizeSyncText(value) {
+  const text = String(value || '').trim().toLocaleLowerCase();
+  try {
+    return text.normalize('NFKC').replace(/[\\/]+/g, '/').replace(/\s+/g, ' ');
+  } catch {
+    return text.replace(/[\\/]+/g, '/').replace(/\s+/g, ' ');
+  }
+}
+
+function deterministicProjectSyncKey({ sourceFileName = '', sourceRegionCount = 0, name = '' } = {}) {
+  return [
+    normalizeSyncText(sourceFileName || 'untitled-cad'),
+    Number(sourceRegionCount || 0),
+    normalizeSyncText(name || 'roof-tile-project')
+  ].join('::');
+}
+
+function projectSyncKey(record = {}) {
+  const project = record.project || {};
+  return String(record.syncProjectKey || project.syncProjectKey || deterministicProjectSyncKey({
+    sourceFileName: record.sourceFileName || project.sourceFileName,
+    sourceRegionCount: record.sourceRegionCount ?? project.sourceRegionCount,
+    name: record.name || projectNameFromFile(record.sourceFileName || project.sourceFileName)
+  }));
+}
+
 function normalizeProjectRecord(record = {}) {
   const project = record.project && record.project.projectType === 'roof-tile-layout'
     ? cloneProjectData(record.project)
     : null;
   if (!project) return null;
+  const sourceFileName = String(record.sourceFileName || project.sourceFileName || '');
+  const name = String(record.name || projectNameFromFile(sourceFileName));
+  const sourceRegionCount = Number(record.sourceRegionCount ?? project.sourceRegionCount ?? 0);
+  const syncKey = projectSyncKey({ ...record, name, sourceFileName, sourceRegionCount, project });
   return {
     id: String(record.id || stableId('project')),
-    name: String(record.name || projectNameFromFile(project.sourceFileName)),
+    name,
     createdAt: record.createdAt || new Date().toISOString(),
     updatedAt: record.updatedAt || record.createdAt || new Date().toISOString(),
-    sourceFileName: String(record.sourceFileName || project.sourceFileName || ''),
-    sourceRegionCount: Number(record.sourceRegionCount ?? project.sourceRegionCount ?? 0),
-    project
+    sourceFileName,
+    sourceRegionCount,
+    syncProjectKey: syncKey,
+    project: { ...project, syncProjectKey: syncKey }
   };
 }
 
@@ -427,6 +458,8 @@ function projectForSync(record) {
   const project = cloneProjectData(record.project || {});
   delete project.sourceDxfText;
   delete project.cad;
+  const syncKey = projectSyncKey(record);
+  project.syncProjectKey = syncKey;
   return {
     id: record.id,
     name: record.name,
@@ -434,6 +467,7 @@ function projectForSync(record) {
     updatedAt: record.updatedAt,
     sourceFileName: record.sourceFileName,
     sourceRegionCount: record.sourceRegionCount,
+    syncProjectKey: syncKey,
     project
   };
 }
@@ -518,20 +552,87 @@ async function activateProjectForCurrentSource({ forceNew = false, name = '', re
   return true;
 }
 
-async function mergeSyncedProjects(remoteProjects = []) {
-  if (!Array.isArray(remoteProjects) || !remoteProjects.length) return;
-  const byId = new Map(state.projectCatalog.map((project) => [project.id, project]));
+async function mergeSyncedProjects(remoteProjects = [], { preferRemote = true } = {}) {
+  const remoteToLocalId = new Map();
+  if (!Array.isArray(remoteProjects) || !remoteProjects.length) return remoteToLocalId;
+
+  const localRecords = state.projectCatalog.map(normalizeProjectRecord).filter(Boolean)
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const byId = new Map(localRecords.map((project) => [project.id, project]));
+  const bySyncKey = new Map();
+  const duplicateLocalIds = new Set();
+  for (const local of localRecords) {
+    const key = projectSyncKey(local);
+    if (!bySyncKey.has(key)) bySyncKey.set(key, local);
+    else duplicateLocalIds.add(local.id);
+  }
+  const claimedLocalIds = new Set();
+
   for (const remote of remoteProjects) {
     const normalized = normalizeProjectRecord(remote);
     if (!normalized) continue;
-    const local = byId.get(normalized.id);
-    if (local?.project) {
-      if (local.project.sourceDxfText) normalized.project.sourceDxfText = local.project.sourceDxfText;
-      if (local.project.cad) normalized.project.cad = cloneProjectData(local.project.cad);
+    const remoteKey = projectSyncKey(normalized);
+    let local = bySyncKey.get(remoteKey);
+    if (!local) local = byId.get(normalized.id);
+    if (!local) {
+      local = localRecords.find((candidate) => (
+        !claimedLocalIds.has(candidate.id)
+        && normalizeSyncText(candidate.sourceFileName) === normalizeSyncText(normalized.sourceFileName)
+        && normalizeSyncText(candidate.name) === normalizeSyncText(normalized.name)
+      ));
     }
-    byId.set(normalized.id, normalized);
+    if (!local) {
+      const sameDrawing = localRecords.filter((candidate) => (
+        !claimedLocalIds.has(candidate.id)
+        && normalizeSyncText(candidate.sourceFileName) === normalizeSyncText(normalized.sourceFileName)
+        && Number(candidate.sourceRegionCount) === Number(normalized.sourceRegionCount)
+      ));
+      // A legacy payload may have a different display name. Only use the
+      // drawing/count fallback when it is unambiguous, so two intentional
+      // layouts of the same drawing remain separate projects.
+      if (sameDrawing.length === 1) local = sameDrawing[0];
+    }
+
+    if (local) {
+      claimedLocalIds.add(local.id);
+      const localTime = Date.parse(local.updatedAt || '') || 0;
+      const remoteTime = Date.parse(normalized.updatedAt || '') || 0;
+      const remoteWins = preferRemote || remoteTime >= localTime;
+      const preferred = remoteWins ? normalized : local;
+      const mergedProject = {
+        ...preferred.project,
+        syncProjectKey: remoteKey
+      };
+      // The sync payload intentionally omits the large CAD source. Keep the
+      // local copy when it is already available on this device.
+      if (local.project?.sourceDxfText) mergedProject.sourceDxfText = local.project.sourceDxfText;
+      if (local.project?.cad) mergedProject.cad = cloneProjectData(local.project.cad);
+      const merged = {
+        ...(remoteWins ? local : normalized),
+        ...(remoteWins ? normalized : local),
+        id: local.id,
+        syncProjectKey: remoteKey,
+        project: mergedProject
+      };
+      byId.set(local.id, merged);
+      bySyncKey.set(remoteKey, merged);
+      remoteToLocalId.set(String(remote.id || normalized.id), local.id);
+      continue;
+    }
+
+    let nextId = normalized.id;
+    while (byId.has(nextId)) nextId = stableId('project');
+    const added = { ...normalized, id: nextId, syncProjectKey: remoteKey };
+    added.project.syncProjectKey = remoteKey;
+    byId.set(nextId, added);
+    bySyncKey.set(remoteKey, added);
+    remoteToLocalId.set(String(remote.id || normalized.id), nextId);
   }
-  await writeProjectCatalog([...byId.values()].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))));
+
+  await writeProjectCatalog([...byId.values()]
+    .filter((project) => !duplicateLocalIds.has(project.id))
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))));
+  return remoteToLocalId;
 }
 
 async function switchProject(projectId) {
@@ -847,6 +948,7 @@ async function runUploadSync({ quiet = false } = {}) {
       await uploadSourceSync(syncKey, sourceInfo);
       await persistActiveProject({ includeSource: false, sync: false });
     }
+    await mergeRemoteSyncStateBeforeUpload(syncKey);
     const payload = buildSyncBundle();
     const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
     if (size > 4000000) throw new Error('同步資料超過雲端單次保存上限，請使用導出 JSON 備份。');
@@ -872,6 +974,49 @@ function uploadSync(options = {}) {
   return wrappedTask;
 }
 
+async function mergeRemoteSyncStateBeforeUpload(syncKey) {
+  let result;
+  try {
+    result = await syncRequest('get', syncKey);
+  } catch (error) {
+    // A new sync code has no cloud row yet. Other failures must stop the
+    // upload; otherwise this device could overwrite an existing cloud copy.
+    if (/\b404\b/.test(String(error?.message || ''))) return;
+    throw error;
+  }
+  const payload = result?.payload;
+  if (!payload || payload.projectType !== 'roof-tile-layout-sync') return;
+  const remoteProjects = Array.isArray(payload.projects) ? [...payload.projects] : [];
+  if (payload.activeProjectId && payload.currentProject
+    && !remoteProjects.some((item) => String(item?.id || '') === String(payload.activeProjectId))) {
+    remoteProjects.push({
+      id: payload.activeProjectId,
+      name: projectNameFromFile(payload.currentProject.sourceFileName),
+      sourceFileName: payload.currentProject.sourceFileName,
+      sourceRegionCount: payload.currentProject.sourceRegionCount,
+      project: payload.currentProject
+    });
+  }
+  await mergeSyncedProjects(remoteProjects, { preferRemote: false });
+  if (payload.namedVersions && typeof payload.namedVersions === 'object') mergeNamedVersions(payload.namedVersions);
+
+  // The explicit upload represents the current device's latest edit. Put it
+  // back into the merged catalog after importing older remote records.
+  if (state.projectId) {
+    const active = findProjectRecord();
+    if (active) {
+      await putProjectRecord({
+        ...active,
+        name: state.projectName || active.name,
+        updatedAt: new Date().toISOString(),
+        sourceFileName: state.sourceFileName,
+        sourceRegionCount: currentSourceRegionCount(),
+        project: projectSnapshotForStorage({ includeSource: false })
+      });
+    }
+  }
+}
+
 async function downloadSync() {
   const syncKey = readSyncKey();
   if (!syncKey) return toast('請先輸入同步碼。', 'warning');
@@ -884,8 +1029,18 @@ async function downloadSync() {
     const project = payload?.currentProject;
     if (!project || project.projectType !== 'roof-tile-layout') throw new Error('雲端沒有可用的屋面佈局。');
     pushHistory();
-    if (Array.isArray(payload.projects)) await mergeSyncedProjects(payload.projects);
-    if (payload.namedVersions && typeof payload.namedVersions === 'object') writeNamedVersions(payload.namedVersions, { sync: false });
+    const remoteProjectRecords = Array.isArray(payload.projects) ? [...payload.projects] : [];
+    if (payload.activeProjectId && !remoteProjectRecords.some((item) => String(item?.id || '') === String(payload.activeProjectId))) {
+      remoteProjectRecords.push({
+        id: payload.activeProjectId,
+        name: projectNameFromFile(project.sourceFileName),
+        sourceFileName: project.sourceFileName,
+        sourceRegionCount: project.sourceRegionCount,
+        project
+      });
+    }
+    const remoteToLocalId = await mergeSyncedProjects(remoteProjectRecords);
+    if (payload.namedVersions && typeof payload.namedVersions === 'object') mergeNamedVersions(payload.namedVersions);
     let restoredSource = false;
     if (project.sourceSyncId) {
       try {
@@ -907,9 +1062,18 @@ async function downloadSync() {
     }
     const sameSource = String(project.sourceFileName || '') === String(state.sourceFileName || '')
       && Number(project.sourceRegionCount || 0) === currentSourceRegionCount();
+    const remoteActiveId = String(payload.activeProjectId || '');
+    const targetProjectId = remoteToLocalId.get(remoteActiveId)
+      || state.projectCatalog.find((item) => projectSyncKey(item) === projectSyncKey({
+        name: projectNameFromFile(project.sourceFileName),
+        sourceFileName: project.sourceFileName,
+        sourceRegionCount: project.sourceRegionCount,
+        project
+      }))?.id
+      || state.projectId;
+    if (targetProjectId) state.projectId = targetProjectId;
     restoreProject(project, restoredSource || sameSource);
-    const syncedProject = state.projectCatalog.find((item) => item.id === payload.activeProjectId);
-    state.projectId = syncedProject?.id || state.projectId;
+    const syncedProject = state.projectCatalog.find((item) => item.id === state.projectId);
     state.projectName = syncedProject?.name || state.projectName || projectNameFromFile(project.sourceFileName);
     if (state.projectId) await persistActiveProject({ includeSource: restoredSource || sameSource, sync: false });
     renderNamedVersions();
@@ -950,6 +1114,50 @@ function writeNamedVersions(versions, { sync = true } = {}) {
     console.warn('Unable to write named project versions', error);
     return false;
   }
+}
+
+function namedVersionIdentity(item = {}, sourceKey = '') {
+  const projectKey = normalizeSyncText(item.projectSyncKey || item.project?.syncProjectKey || '');
+  const name = normalizeSyncText(item.name || item.id || 'unnamed-version');
+  return `${normalizeSyncText(sourceKey)}::${projectKey || 'legacy'}::${name}`;
+}
+
+function mergeNamedVersions(remoteVersions = {}) {
+  const localVersions = readNamedVersions();
+  const merged = cloneProjectData(localVersions);
+  const localKeys = Object.keys(localVersions);
+  const keyFor = (remoteKey) => localKeys.find((localKey) => (
+    normalizeSyncText(localKey) === normalizeSyncText(remoteKey)
+  )) || remoteKey;
+
+  for (const [remoteKey, remoteList] of Object.entries(remoteVersions)) {
+    if (!Array.isArray(remoteList)) continue;
+    const targetKey = keyFor(remoteKey);
+    const current = Array.isArray(merged[targetKey]) ? [...merged[targetKey]] : [];
+    for (const remoteItem of remoteList) {
+      if (!remoteItem || typeof remoteItem !== 'object' || !remoteItem.project) continue;
+      let index = current.findIndex((item) => namedVersionIdentity(item, targetKey) === namedVersionIdentity(remoteItem, targetKey));
+      // Legacy versions did not carry a stable project key. Match them by
+      // drawing and version name once, then retain the newer snapshot.
+      if (index < 0) {
+        index = current.findIndex((item) => (
+          normalizeSyncText(item?.name) === normalizeSyncText(remoteItem.name)
+          && (!item?.projectSyncKey || !remoteItem.projectSyncKey
+            || normalizeSyncText(item.projectSyncKey) === normalizeSyncText(remoteItem.projectSyncKey))
+        ));
+      }
+      if (index < 0) {
+        current.push(cloneProjectData(remoteItem));
+        continue;
+      }
+      const localItem = current[index];
+      const remoteTime = Date.parse(remoteItem.savedAt || '') || 0;
+      const localTime = Date.parse(localItem.savedAt || '') || 0;
+      if (remoteTime >= localTime) current[index] = cloneProjectData(remoteItem);
+    }
+    merged[targetKey] = current;
+  }
+  return writeNamedVersions(merged, { sync: false });
 }
 
 function namedVersionsForCurrentSource() {
@@ -997,7 +1205,21 @@ function saveNamedVersion() {
     savedAt: new Date().toISOString(),
     sourceFileName: state.sourceFileName,
     sourceRegionCount: currentSourceRegionCount(),
-    project: snapshotProject()
+    projectSyncKey: projectSyncKey(findProjectRecord() || {
+      name: state.projectName,
+      sourceFileName: state.sourceFileName,
+      sourceRegionCount: currentSourceRegionCount(),
+      project: state
+    }),
+    project: {
+      ...snapshotProject(),
+      syncProjectKey: projectSyncKey(findProjectRecord() || {
+        name: state.projectName,
+        sourceFileName: state.sourceFileName,
+        sourceRegionCount: currentSourceRegionCount(),
+        project: state
+      })
+    }
   };
   allVersions[sourceKey] = existing
     ? sourceVersions.map((version) => version.id === existing.id ? item : version)
