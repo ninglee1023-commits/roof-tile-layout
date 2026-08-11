@@ -849,7 +849,7 @@ async function runUploadSync({ quiet = false } = {}) {
     }
     const payload = buildSyncBundle();
     const size = new TextEncoder().encode(JSON.stringify(payload)).byteLength;
-    if (size > 900000) throw new Error('同步資料超過雲端單次保存上限，請使用導出 JSON 備份。');
+    if (size > 4000000) throw new Error('同步資料超過雲端單次保存上限，請使用導出 JSON 備份。');
     const result = await syncRequest('put', syncKey, payload);
     setSyncStatus(`已同步 ${new Date(result.updatedAt || payload.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`, 'saved');
     if (!quiet) toast('目前佈局及命名版本已上傳到雲端。', 'success');
