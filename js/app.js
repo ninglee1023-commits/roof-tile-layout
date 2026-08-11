@@ -42,6 +42,7 @@ const domIds = [
   'verticalCountMetric','sourceNotice','tileLongInput','tileShortInput','jointXInput','jointYInput','staggerEnabledInput','staggerOffsetInput','minCutInput',
   'dimensionDigitsInput','showFullTilesInput','showCutLabelsInput','showCadInput','keepArchitectureInput','resetTileSettings','selectedRegionCount',
   'projectSelect','projectStatus','newProjectButton','renameProjectButton','deleteProjectButton',
+  'recoveryBox','recoveryText','recoverLatestButton','dismissRecoveryButton',
   'savedVersionSelect','versionStatus','saveNamedVersionButton','loadNamedVersionButton','deleteNamedVersionButton',
   'exportProjectButton','importProjectButton','projectFileInput','syncKeyInput','uploadSyncButton','downloadSyncButton','syncStatus',
   'mergeRegionsButton','splitRegionsButton','deleteRegionButton','removeHatchButton','selectionHint',
@@ -78,11 +79,15 @@ const NAMED_VERSIONS_KEY = 'roof-tile-layout:named-versions:v1';
 const SYNC_KEY_STORAGE_KEY = 'roof-tile-layout:sync-key:v1';
 const SYNC_ENDPOINT = String(document.querySelector?.('meta[name="roof-tile-sync-endpoint"]')?.content || '/api/sync').trim() || '/api/sync';
 const PROJECTS_DB_NAME = 'roof-tile-layout-projects-v1';
-const PROJECTS_DB_VERSION = 1;
+const PROJECTS_DB_VERSION = 2;
 const PROJECTS_STORE_NAME = 'projects';
+const RECOVERY_STORE_NAME = 'recovery';
 const PROJECTS_FALLBACK_KEY = 'roof-tile-layout:projects:v1';
 const PROJECT_MAX_COUNT = 50;
 const BACKUP_SCHEMA_VERSION = 1;
+const RECOVERY_SCHEMA_VERSION = 1;
+const RECOVERY_MAX_PER_PROJECT = 10;
+const RECOVERY_LOCAL_KEY = 'roof-tile-layout:recovery:v1';
 // Keep the base64 request comfortably below the Worker/D1 request limit on iPad Safari.
 const SOURCE_CHUNK_BYTES = 400000;
 
@@ -99,6 +104,9 @@ const state = {
   projectCatalog: [],
   pendingProjectName: '',
   projectDbPromise: null,
+  pendingRecovery: null,
+  recoveryWritePromise: null,
+  lastRecoveryFingerprint: '',
   sourceRegionCount: 0,
   removedHatchKeys: new Set(),
   sourceMode: 'loading',
@@ -370,6 +378,11 @@ function openProjectDatabase() {
       if (!request.result.objectStoreNames.contains(PROJECTS_STORE_NAME)) {
         request.result.createObjectStore(PROJECTS_STORE_NAME, { keyPath: 'id' });
       }
+      if (!request.result.objectStoreNames.contains(RECOVERY_STORE_NAME)) {
+        const store = request.result.createObjectStore(RECOVERY_STORE_NAME, { keyPath: 'id' });
+        store.createIndex('byProjectId', 'projectId', { unique: false });
+        store.createIndex('bySavedAt', 'savedAt', { unique: false });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error('project database unavailable'));
@@ -425,6 +438,233 @@ async function writeProjectCatalog(records) {
   }
   state.projectCatalog = normalized;
   renderProjectControls();
+}
+
+function recoveryProjectId(project = snapshotProject()) {
+  const record = findProjectRecord();
+  return String(state.projectId || record?.id || projectSyncKey({
+    name: state.projectName,
+    sourceFileName: project.sourceFileName || state.sourceFileName,
+    sourceRegionCount: project.sourceRegionCount || currentSourceRegionCount(),
+    project
+  }));
+}
+
+function buildRecoverySnapshot(project, savedAt = new Date().toISOString()) {
+  const record = findProjectRecord();
+  const syncKey = projectSyncKey(record || {
+    name: state.projectName,
+    sourceFileName: project.sourceFileName || state.sourceFileName,
+    sourceRegionCount: project.sourceRegionCount || currentSourceRegionCount(),
+    project
+  });
+  return {
+    schema: RECOVERY_SCHEMA_VERSION,
+    recoveryType: 'roof-tile-layout-recovery',
+    id: `recovery:${recoveryProjectId(project)}:${savedAt}:${stableId('snapshot')}`,
+    projectId: state.projectId || record?.id || '',
+    projectName: state.projectName || record?.name || projectNameFromFile(project.sourceFileName),
+    projectSyncKey: syncKey,
+    sourceFileName: project.sourceFileName || state.sourceFileName,
+    sourceRegionCount: Number(project.sourceRegionCount || currentSourceRegionCount()),
+    savedAt,
+    project: { ...cloneProjectData(project), syncProjectKey: syncKey }
+  };
+}
+
+function recoverySort(a, b) {
+  return (Date.parse(b.savedAt || '') || 0) - (Date.parse(a.savedAt || '') || 0);
+}
+
+function normalizeRecoverySnapshot(item = {}) {
+  const project = item.project?.projectType === 'roof-tile-layout'
+    ? cloneProjectData(item.project)
+    : item.projectType === 'roof-tile-layout' ? cloneProjectData(item) : null;
+  if (!project) return null;
+  const savedAt = item.savedAt || project.savedAt || new Date(0).toISOString();
+  const syncKey = String(item.projectSyncKey || project.syncProjectKey || deterministicProjectSyncKey({
+    sourceFileName: item.sourceFileName || project.sourceFileName,
+    sourceRegionCount: item.sourceRegionCount ?? project.sourceRegionCount,
+    name: item.projectName || projectNameFromFile(item.sourceFileName || project.sourceFileName)
+  }));
+  return {
+    schema: Number(item.schema || RECOVERY_SCHEMA_VERSION),
+    recoveryType: 'roof-tile-layout-recovery',
+    id: String(item.id || `legacy-recovery:${savedAt}`),
+    projectId: String(item.projectId || ''),
+    projectName: String(item.projectName || projectNameFromFile(project.sourceFileName)),
+    projectSyncKey: syncKey,
+    sourceFileName: String(item.sourceFileName || project.sourceFileName || ''),
+    sourceRegionCount: Number(item.sourceRegionCount ?? project.sourceRegionCount ?? 0),
+    savedAt,
+    project: { ...project, syncProjectKey: syncKey }
+  };
+}
+
+function readLocalRecoverySnapshots() {
+  if (typeof localStorage === 'undefined') return [];
+  const snapshots = [];
+  for (const key of [RECOVERY_LOCAL_KEY, AUTO_PROJECT_KEY]) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key) || (key === RECOVERY_LOCAL_KEY ? '[]' : 'null'));
+      const values = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+      for (const value of values) {
+        const normalized = normalizeRecoverySnapshot(value);
+        if (normalized) snapshots.push(normalized);
+      }
+    } catch (error) {
+      console.warn(`Unable to read recovery snapshots from ${key}`, error);
+    }
+  }
+  return snapshots;
+}
+
+async function readRecoverySnapshots() {
+  const local = readLocalRecoverySnapshots();
+  try {
+    const db = await openProjectDatabase();
+    if (!db || !db.objectStoreNames.contains(RECOVERY_STORE_NAME)) return local;
+    const transaction = db.transaction(RECOVERY_STORE_NAME, 'readonly');
+    const records = await idbRequest(transaction.objectStore(RECOVERY_STORE_NAME).getAll());
+    return [...records.map(normalizeRecoverySnapshot).filter(Boolean), ...local]
+      .sort(recoverySort);
+  } catch (error) {
+    console.warn('Unable to read IndexedDB recovery snapshots', error);
+    return local;
+  }
+}
+
+function completeIdbTransaction(transaction) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error('recovery transaction failed'));
+    transaction.onabort = () => reject(transaction.error || new Error('recovery transaction aborted'));
+  });
+}
+
+async function writeRecoverySnapshot(snapshot) {
+  const db = await openProjectDatabase();
+  if (db && db.objectStoreNames.contains(RECOVERY_STORE_NAME)) {
+    const transaction = db.transaction(RECOVERY_STORE_NAME, 'readwrite');
+    transaction.objectStore(RECOVERY_STORE_NAME).put(snapshot);
+    await completeIdbTransaction(transaction);
+
+    const readTransaction = db.transaction(RECOVERY_STORE_NAME, 'readonly');
+    const all = await idbRequest(readTransaction.objectStore(RECOVERY_STORE_NAME).getAll());
+    const normalized = all.map(normalizeRecoverySnapshot).filter(Boolean);
+    const keepIds = new Set();
+    const obsolete = [];
+    const byProject = new Map();
+    for (const item of normalized.sort(recoverySort)) {
+      const key = item.projectSyncKey || item.projectId || item.sourceFileName;
+      const list = byProject.get(key) || [];
+      list.push(item);
+      byProject.set(key, list);
+    }
+    for (const list of byProject.values()) {
+      for (const item of list.slice(0, RECOVERY_MAX_PER_PROJECT)) keepIds.add(item.id);
+      for (const item of list.slice(RECOVERY_MAX_PER_PROJECT)) obsolete.push(item.id);
+    }
+    if (obsolete.length) {
+      const deleteTransaction = db.transaction(RECOVERY_STORE_NAME, 'readwrite');
+      const store = deleteTransaction.objectStore(RECOVERY_STORE_NAME);
+      for (const id of obsolete) if (!keepIds.has(id)) store.delete(id);
+      await completeIdbTransaction(deleteTransaction);
+    }
+    return true;
+  }
+
+  if (typeof localStorage === 'undefined') return false;
+  const snapshots = [...readLocalRecoverySnapshots(), snapshot]
+    .sort(recoverySort)
+    .filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
+  const byProject = new Map();
+  for (const item of snapshots) {
+    const key = item.projectSyncKey || item.projectId || item.sourceFileName;
+    const list = byProject.get(key) || [];
+    if (list.length < RECOVERY_MAX_PER_PROJECT) list.push(item);
+    byProject.set(key, list);
+  }
+  try {
+    localStorage.setItem(RECOVERY_LOCAL_KEY, JSON.stringify([...byProject.values()].flat()));
+    return true;
+  } catch (error) {
+    console.warn('Unable to write local recovery snapshot', error);
+    return false;
+  }
+}
+
+async function findLatestRecoverySnapshot(fileName, sourceRegionCount) {
+  const snapshots = await readRecoverySnapshots();
+  const matching = snapshots.filter((item) => (
+    String(item.sourceFileName || '') === String(fileName || '')
+    && Number(item.sourceRegionCount) === Number(sourceRegionCount)
+  ));
+  return matching.sort(recoverySort)[0] || null;
+}
+
+function recoveryBaseline(candidate) {
+  const byId = candidate.projectId ? state.projectCatalog.find((item) => item.id === candidate.projectId) : null;
+  const byKey = state.projectCatalog.find((item) => projectSyncKey(item) === candidate.projectSyncKey);
+  const bySource = state.projectCatalog.find((item) => (
+    normalizeSyncText(item.sourceFileName) === normalizeSyncText(candidate.sourceFileName)
+    && Number(item.sourceRegionCount) === Number(candidate.sourceRegionCount)
+  ));
+  return byId || byKey || bySource || null;
+}
+
+function isRecoveryNewer(candidate) {
+  const savedAt = Date.parse(candidate?.savedAt || '') || 0;
+  const baselineAt = Date.parse(recoveryBaseline(candidate)?.updatedAt || '') || 0;
+  return Boolean(candidate && savedAt > baselineAt + 1000);
+}
+
+function showRecoveryCandidate(candidate) {
+  if (!candidate || !isRecoveryNewer(candidate)) return false;
+  state.pendingRecovery = candidate;
+  if (dom.recoveryText) {
+    const time = candidate.savedAt
+      ? new Date(candidate.savedAt).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+      : '';
+    dom.recoveryText.textContent = `發現 ${time} 的未完成保存版本（${candidate.projectName}），可恢復 crash 前的排布、合併及起點設定。`;
+  }
+  if (dom.recoveryBox) dom.recoveryBox.hidden = false;
+  updateAutosaveStatus('發現未完成保存版本', 'warning');
+  return true;
+}
+
+function hideRecoveryCandidate() {
+  state.pendingRecovery = null;
+  if (dom.recoveryBox) dom.recoveryBox.hidden = true;
+}
+
+async function recoverPendingSnapshot() {
+  const candidate = state.pendingRecovery;
+  if (!candidate) return;
+  try {
+    pushHistory();
+    const record = recoveryBaseline(candidate);
+    if (record) {
+      state.projectId = record.id;
+      state.projectName = candidate.projectName || record.name;
+      restoreProject(candidate.project, true);
+    } else {
+      restoreProject(candidate.project, true);
+      await activateProjectForCurrentSource({
+        forceNew: true,
+        name: candidate.projectName || projectNameFromFile(candidate.sourceFileName),
+        restoreExisting: false
+      });
+    }
+    await persistActiveProject({ includeSource: false, sync: false });
+    hideRecoveryCandidate();
+    renderAllControls();
+    scheduleAutoSave();
+    toast('已恢復 crash 前的自動保存版本，並重新寫入目前 project。', 'success');
+  } catch (error) {
+    console.error('Unable to recover automatic project snapshot', error);
+    toast(`恢復自動保存版本失敗：${error.message}`, 'error');
+  }
 }
 
 async function putProjectRecord(record) {
@@ -1269,6 +1509,7 @@ function updateAutosaveStatus(message, type = '') {
 }
 
 function saveAutoProject() {
+  if (state.pendingRecovery) return false;
   if (typeof localStorage === 'undefined') {
     updateAutosaveStatus('此瀏覽器不支援自動保存', 'error');
     return false;
@@ -1279,7 +1520,25 @@ function saveAutoProject() {
     localStorage.setItem(AUTO_PROJECT_KEY, JSON.stringify(project));
     const savedAt = new Date(project.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     updateAutosaveStatus(`已自動保存 ${savedAt}`, 'saved');
-    void persistActiveProject({ includeSource: false, sync: true });
+    const recoverySnapshot = buildRecoverySnapshot(project, project.savedAt);
+    const fingerprint = JSON.stringify({ ...project, savedAt: '' });
+    const isChanged = fingerprint !== state.lastRecoveryFingerprint;
+    state.lastRecoveryFingerprint = fingerprint;
+    localStorage.setItem(AUTO_PROJECT_KEY, JSON.stringify(recoverySnapshot));
+    updateAutosaveStatus('保存中…');
+    const projectSavePromise = persistActiveProject({ includeSource: false, sync: true });
+    const recoveryTask = isChanged
+      ? (state.recoveryWritePromise || Promise.resolve()).catch(() => {}).then(() => writeRecoverySnapshot(recoverySnapshot))
+      : Promise.resolve(true);
+    state.recoveryWritePromise = recoveryTask;
+    void Promise.all([recoveryTask, projectSavePromise]).then(([recoverySaved, projectSaved]) => {
+      const label = new Date(project.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (recoverySaved || projectSaved) updateAutosaveStatus(`已保存 ${label}`, 'saved');
+      else updateAutosaveStatus('保存失敗，請導出 JSON', 'error');
+    }).catch((error) => {
+      console.warn('Unable to complete automatic project save', error);
+      updateAutosaveStatus('保存失敗，請導出 JSON', 'error');
+    });
     return true;
   } catch (error) {
     console.warn('Unable to save automatic project snapshot', error);
@@ -1290,6 +1549,7 @@ function saveAutoProject() {
 
 function scheduleAutoSave() {
   if (typeof localStorage === 'undefined') return;
+  if (state.pendingRecovery) return;
   clearTimeout(state.autoSaveTimer);
   updateAutosaveStatus('保存中…');
   state.autoSaveTimer = setTimeout(saveAutoProject, 360);
@@ -3465,6 +3725,7 @@ async function loadCadBuffer(arrayBuffer, fileName, {
   projectName = ''
 } = {}) {
   try {
+    let recoveryCandidate = null;
     if (!initial && !skipProjectPersist) await persistActiveProject({ includeSource: true, sync: false });
     const sourceFormat = String(fileName).toLowerCase().endsWith('.dxf') ? 'DXF' : 'DWG';
     state.sourceDxfText = sourceFormat === 'DXF' ? new TextDecoder('utf-8').decode(arrayBuffer) : '';
@@ -3479,9 +3740,10 @@ async function loadCadBuffer(arrayBuffer, fileName, {
     state.layerMapping.region = inferAreaHatchLayer(cad);
     const regionCount = rebuildRegionsFromHatches();
     if (!regionCount && !state.sourceRegionCount) throw new Error('所選圖層沒有可用的 HATCH 鋪磚區域。');
-    if (restoreAuto) restoreAutoProjectIfCompatible(fileName);
+    if (restoreAuto) recoveryCandidate = await findLatestRecoverySnapshot(fileName, currentSourceRegionCount());
     if (activateProject) {
       const activated = await activateProjectForCurrentSource({ forceNew: forceNewProject, name: projectName, restoreExisting: !forceNewProject });
+      if (activated && !forceNewProject) showRecoveryCandidate(recoveryCandidate);
       if (!activated) toast(`已達 project 上限 ${PROJECT_MAX_COUNT} 個；目前圖紙尚未加入 project 庫。`, 'warning');
     }
     setSourceBadge('HATCH 精確區域', 'exact');
@@ -3543,6 +3805,11 @@ function bindEvents() {
     if (!name) return;
     state.pendingProjectName = name;
     dom.cadFileInput.click();
+  });
+  dom.recoverLatestButton?.addEventListener('click', () => { void recoverPendingSnapshot(); });
+  dom.dismissRecoveryButton?.addEventListener('click', () => {
+    hideRecoveryCandidate();
+    updateAutosaveStatus('已忽略恢復提示');
   });
   dom.cadFileInput.addEventListener('change', async () => {
     const file = dom.cadFileInput.files?.[0]; if (!file) return;
@@ -3707,6 +3974,10 @@ function bindEvents() {
     }
   });
   new ResizeObserver(() => requestRender()).observe(dom.canvasFrame);
+  document.addEventListener?.('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveAutoProject();
+  });
+  window.addEventListener?.('pagehide', () => saveAutoProject());
 }
 
 async function initialize() {
