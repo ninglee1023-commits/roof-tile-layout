@@ -738,6 +738,19 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+async function gzipBytes(bytes) {
+  if (typeof CompressionStream !== 'function') return bytes;
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function gunzipBytes(bytes) {
+  if (bytes.length < 2 || bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes;
+  if (typeof DecompressionStream !== 'function') throw new Error('此瀏覽器不支援 DXF 底圖解壓縮。');
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
 function base64ToBytes(value) {
   const binary = atob(String(value || ''));
   const bytes = new Uint8Array(binary.length);
@@ -752,9 +765,10 @@ async function sha256Hex(bytes) {
 
 async function prepareSourceSync() {
   if (!state.sourceDxfText) return null;
-  const bytes = new TextEncoder().encode(state.sourceDxfText);
+  const originalBytes = new TextEncoder().encode(state.sourceDxfText);
   const savedSourceId = String(state.sourceSyncId || '').trim();
-  const sourceId = /^[a-f0-9]{64}$/i.test(savedSourceId) ? savedSourceId : await sha256Hex(bytes);
+  const sourceId = /^[a-f0-9]{64}$/i.test(savedSourceId) ? savedSourceId : await sha256Hex(originalBytes);
+  const bytes = await gzipBytes(originalBytes);
   state.sourceSyncId = sourceId;
   return { sourceId, bytes, sourceFileName: state.sourceFileName };
 }
@@ -800,12 +814,13 @@ async function downloadSourceSync(syncKey, sourceId) {
     for (const result of results) chunks.push(base64ToBytes(result.data));
   }
   const totalBytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
-  const bytes = new Uint8Array(totalBytes);
+  const storedBytes = new Uint8Array(totalBytes);
   let offset = 0;
   for (const chunk of chunks) {
-    bytes.set(chunk, offset);
+    storedBytes.set(chunk, offset);
     offset += chunk.length;
   }
+  const bytes = await gunzipBytes(storedBytes);
   return {
     sourceId,
     sourceFileName: first.sourceFileName || '',
