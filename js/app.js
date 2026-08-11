@@ -76,6 +76,7 @@ const DEFAULT_SETTINGS = Object.freeze({
 const AUTO_PROJECT_KEY = 'roof-tile-layout:auto-project:v1';
 const NAMED_VERSIONS_KEY = 'roof-tile-layout:named-versions:v1';
 const SYNC_KEY_STORAGE_KEY = 'roof-tile-layout:sync-key:v1';
+const SYNC_ENDPOINT = String(document.querySelector('meta[name="roof-tile-sync-endpoint"]')?.content || '/api/sync').trim() || '/api/sync';
 const PROJECTS_DB_NAME = 'roof-tile-layout-projects-v1';
 const PROJECTS_DB_VERSION = 1;
 const PROJECTS_STORE_NAME = 'projects';
@@ -676,7 +677,7 @@ async function importProjectBackup(file) {
 }
 
 async function syncRequest(action, syncKey, payload = null) {
-  const response = await fetch('/api/sync', {
+  const response = await fetch(SYNC_ENDPOINT, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ action, syncKey, payload })
