@@ -763,16 +763,22 @@ async function uploadSourceSync(syncKey, sourceInfo) {
   const cacheKey = sourceSyncCacheKey(syncKey, sourceInfo.sourceId);
   if (state.sourceSyncUploads.has(cacheKey)) return;
   const chunkCount = Math.ceil(sourceInfo.bytes.length / SOURCE_CHUNK_BYTES);
-  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-    const start = chunkIndex * SOURCE_CHUNK_BYTES;
-    const chunk = sourceInfo.bytes.subarray(start, Math.min(start + SOURCE_CHUNK_BYTES, sourceInfo.bytes.length));
-    await syncRequest('put-source', syncKey, {
-      sourceId: sourceInfo.sourceId,
-      sourceFileName: sourceInfo.sourceFileName,
-      chunkIndex,
-      chunkCount,
-      data: bytesToBase64(chunk)
-    });
+  const concurrency = 4;
+  for (let batchStart = 0; batchStart < chunkCount; batchStart += concurrency) {
+    const batch = [];
+    for (let offset = 0; offset < concurrency && batchStart + offset < chunkCount; offset += 1) {
+      const chunkIndex = batchStart + offset;
+      const start = chunkIndex * SOURCE_CHUNK_BYTES;
+      const chunk = sourceInfo.bytes.subarray(start, Math.min(start + SOURCE_CHUNK_BYTES, sourceInfo.bytes.length));
+      batch.push(syncRequest('put-source', syncKey, {
+        sourceId: sourceInfo.sourceId,
+        sourceFileName: sourceInfo.sourceFileName,
+        chunkIndex,
+        chunkCount,
+        data: bytesToBase64(chunk)
+      }));
+    }
+    await Promise.all(batch);
   }
   state.sourceSyncUploads.add(cacheKey);
 }
@@ -782,9 +788,15 @@ async function downloadSourceSync(syncKey, sourceId) {
   const first = await syncRequest('get-source', syncKey, { sourceId, chunkIndex: 0 });
   const chunkCount = Math.max(1, Number(first.chunkCount || 1));
   const chunks = [base64ToBytes(first.data)];
-  for (let chunkIndex = 1; chunkIndex < chunkCount; chunkIndex += 1) {
-    const result = await syncRequest('get-source', syncKey, { sourceId, chunkIndex });
-    chunks.push(base64ToBytes(result.data));
+  const concurrency = 4;
+  for (let batchStart = 1; batchStart < chunkCount; batchStart += concurrency) {
+    const batch = [];
+    for (let offset = 0; offset < concurrency && batchStart + offset < chunkCount; offset += 1) {
+      const chunkIndex = batchStart + offset;
+      batch.push(syncRequest('get-source', syncKey, { sourceId, chunkIndex }));
+    }
+    const results = await Promise.all(batch);
+    for (const result of results) chunks.push(base64ToBytes(result.data));
   }
   const totalBytes = chunks.reduce((total, chunk) => total + chunk.length, 0);
   const bytes = new Uint8Array(totalBytes);
