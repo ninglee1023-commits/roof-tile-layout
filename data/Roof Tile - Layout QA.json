@@ -1,0 +1,263 @@
+{
+  "source": "C:\\Users\\User\\AppData\\Local\\Temp\\RoofTile\\RoofTile-working.dxf",
+  "layer": "ROOF_TILE_LAYOUT",
+  "closed_source_polylines": 49,
+  "paired_regions": 24,
+  "unpaired_regions": 0,
+  "regions_used": 24,
+  "horizontal_regions": 13,
+  "vertical_regions": 11,
+  "h_ref_x": 91066.54009721676,
+  "h_ref_y": -71413.28395308017,
+  "v_ref_x": 62266.5,
+  "v_ref_y": -68289.75,
+  "candidate_grid_cells": 12712,
+  "line_segments": 37020,
+  "joint_band_filtered_segments": 0,
+  "short_line_segments_under_50": 403,
+  "short_line_total_under_50": 12878.895,
+  "min_generated_line_segment": 2.290000000008149,
+  "short_segment_metric_note": "Counts clipped layout-line fragments under 50mm; it is not a direct tile-piece width audit. Irregular boundary corner pieces remain VERIFY for construction detailing.",
+  "region_summary": [
+    {
+      "rotation": 0,
+      "vertices": 42,
+      "min_x": 67221.639,
+      "max_x": 115911.639,
+      "min_y": -21690.015,
+      "max_y": -15152.515,
+      "holes": 0,
+      "new_segments": 4342
+    },
+    {
+      "rotation": 90,
+      "vertices": 12,
+      "min_x": 62052.141,
+      "max_x": 67367.141,
+      "min_y": -52772.988,
+      "max_y": -45010.488,
+      "holes": 0,
+      "new_segments": 924
+    },
+    {
+      "rotation": 0,
+      "vertices": 18,
+      "min_x": 67732.141,
+      "max_x": 78897.141,
+      "min_y": -51772.988,
+      "max_y": -45010.488,
+      "holes": 0,
+      "new_segments": 1356
+    },
+    {
+      "rotation": 0,
+      "vertices": 38,
+      "min_x": 76052.141,
+      "max_x": 96242.141,
+      "min_y": -51797.988,
+      "max_y": -45010.488,
+      "holes": 0,
+      "new_segments": 2342
+    },
+    {
+      "rotation": 0,
+      "vertices": 12,
+      "min_x": 96802.141,
+      "max_x": 111467.141,
+      "min_y": -52422.988,
+      "max_y": -47247.988,
+      "holes": 0,
+      "new_segments": 1212
+    },
+    {
+      "rotation": 90,
+      "vertices": 6,
+      "min_x": 114402.141,
+      "max_x": 118742.141,
+      "min_y": -52672.988,
+      "max_y": -47212.988,
+      "holes": 0,
+      "new_segments": 650
+    },
+    {
+      "rotation": 0,
+      "vertices": 4,
+      "min_x": 108602.141,
+      "max_x": 118742.141,
+      "min_y": -46847.988,
+      "max_y": -44660.488,
+      "holes": 0,
+      "new_segments": 621
+    },
+    {
+      "rotation": 0,
+      "vertices": 38,
+      "min_x": 62052.141,
+      "max_x": 118742.141,
+      "min_y": -44645.488,
+      "max_y": -39232.988,
+      "holes": 0,
+      "new_segments": 4608
+    },
+    {
+      "rotation": 90,
+      "vertices": 22,
+      "min_x": 133755.287,
+      "max_x": 140442.79,
+      "min_y": -20553.284,
+      "max_y": -11428.284,
+      "holes": 0,
+      "new_segments": 1200
+    },
+    {
+      "rotation": 90,
+      "vertices": 22,
+      "min_x": 128452.79,
+      "max_x": 133390.29,
+      "min_y": -21593.284,
+      "max_y": -5928.284,
+      "holes": 0,
+      "new_segments": 1499
+    },
+    {
+      "rotation": 90,
+      "vertices": 4,
+      "min_x": 129177.79,
+      "max_x": 130842.79,
+      "min_y": -27668.284,
+      "max_y": -21958.284,
+      "holes": 0,
+      "new_segments": 312
+    },
+    {
+      "rotation": 90,
+      "vertices": 7,
+      "min_x": 131102.79,
+      "max_x": 133330.285,
+      "min_y": -27633.286,
+      "max_y": -23028.284,
+      "holes": 0,
+      "new_segments": 300
+    },
+    {
+      "rotation": 90,
+      "vertices": 16,
+      "min_x": 128402.79,
+      "max_x": 130842.79,
+      "min_y": -56078.284,
+      "max_y": -28033.284,
+      "holes": 0,
+      "new_segments": 1421
+    },
+    {
+      "rotation": 90,
+      "vertices": 24,
+      "min_x": 128777.79,
+      "max_x": 139042.79,
+      "min_y": -61543.284,
+      "max_y": -20918.284,
+      "holes": 0,
+      "new_segments": 3482
+    },
+    {
+      "rotation": 90,
+      "vertices": 5,
+      "min_x": 128777.79,
+      "max_x": 132542.79,
+      "min_y": -62793.284,
+      "max_y": -58858.284,
+      "holes": 0,
+      "new_segments": 422
+    },
+    {
+      "rotation": 90,
+      "vertices": 13,
+      "min_x": 133952.79,
+      "max_x": 140617.79,
+      "min_y": -68528.284,
+      "max_y": -61803.284,
+      "holes": 0,
+      "new_segments": 1114
+    },
+    {
+      "rotation": 0,
+      "vertices": 29,
+      "min_x": 108887.79,
+      "max_x": 140617.79,
+      "min_y": -75218.284,
+      "max_y": -68868.284,
+      "holes": 0,
+      "new_segments": 2975
+    },
+    {
+      "rotation": 0,
+      "vertices": 14,
+      "min_x": 90952.79,
+      "max_x": 108542.79,
+      "min_y": -76493.284,
+      "max_y": -69943.284,
+      "holes": 0,
+      "new_segments": 2243
+    },
+    {
+      "rotation": 0,
+      "vertices": 40,
+      "min_x": 90702.79,
+      "max_x": 108988.29,
+      "min_y": -69578.284,
+      "max_y": -64053.284,
+      "holes": 0,
+      "new_segments": 1991
+    },
+    {
+      "rotation": 0,
+      "vertices": 19,
+      "min_x": 103451.759,
+      "max_x": 123742.79,
+      "min_y": -69578.284,
+      "max_y": -64753.284,
+      "holes": 0,
+      "new_segments": 1388
+    },
+    {
+      "rotation": 0,
+      "vertices": 4,
+      "min_x": 112892.79,
+      "max_x": 115692.79,
+      "min_y": -71793.284,
+      "max_y": -69943.284,
+      "holes": 0,
+      "new_segments": 154
+    },
+    {
+      "rotation": 0,
+      "vertices": 6,
+      "min_x": 108907.79,
+      "max_x": 112702.79,
+      "min_y": -71793.284,
+      "max_y": -69943.284,
+      "holes": 0,
+      "new_segments": 166
+    },
+    {
+      "rotation": 0,
+      "vertices": 30,
+      "min_x": 104096.644,
+      "max_x": 121661.639,
+      "min_y": -29367.515,
+      "max_y": -17402.515,
+      "holes": 0,
+      "new_segments": 2026
+    },
+    {
+      "rotation": 90,
+      "vertices": 7,
+      "min_x": 131102.79,
+      "max_x": 133390.29,
+      "min_y": -21558.284,
+      "max_y": -17178.284,
+      "holes": 0,
+      "new_segments": 272
+    }
+  ]
+}
