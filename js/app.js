@@ -249,18 +249,27 @@ function currentSourceRegionCount() {
 }
 
 function snapshotProject({ includeSource = false } = {}) {
+  const baseRegionNumbers = new Set(state.regions.map((region) => region.baseRegionNumber).filter((number) => number != null));
+  const inferredHatchAnalysis = !state.hatchObjectCount && state.cad && state.layerMapping.region
+    ? hatchComponentsFromLayer(state.cad, state.layerMapping.region)
+    : null;
+  const inferredHatchObjectCount = Number(state.hatchObjectCount || inferredHatchAnalysis?.hatches?.length || 0);
+  const inferredHoleCount = Number(state.hatchHoleCount || state.regions.reduce((count, region) => count + (region.holes?.length || 0), 0));
+  const inferredBaseRegionCount = Number(state.baseRegionCount || baseRegionNumbers.size || 0);
+  const inferredSplitRegionCount = Number(state.splitRegionCount || state.regions.length || 0);
+  const inferredDetectedJointCount = Number(state.detectedJointCount || state.bands.filter((band) => band.source === 'dxf-joint-hatch').length || 0);
   const project = {
     version: 5,
     projectType: 'roof-tile-layout',
     sourceFileName: state.sourceFileName,
     sourceMode: state.sourceMode,
     sourceRegionCount: currentSourceRegionCount(),
-    hatchObjectCount: Number(state.hatchObjectCount || 0),
-    hatchHoleCount: Number(state.hatchHoleCount || 0),
+    hatchObjectCount: inferredHatchObjectCount,
+    hatchHoleCount: inferredHoleCount,
     removedOverlapRegions: Number(state.removedOverlapRegions || 0),
-    baseRegionCount: Number(state.baseRegionCount || 0),
-    splitRegionCount: Number(state.splitRegionCount || state.regions.length || 0),
-    detectedJointCount: Number(state.detectedJointCount || state.bands.filter((band) => band.source === 'dxf-joint-hatch').length || 0),
+    baseRegionCount: inferredBaseRegionCount,
+    splitRegionCount: inferredSplitRegionCount,
+    detectedJointCount: inferredDetectedJointCount,
     exactCount: Number(state.exactCount || 0),
     removedHatchKeys: [...state.removedHatchKeys],
     settings: structuredClone(state.settings),
