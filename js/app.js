@@ -255,6 +255,13 @@ function snapshotProject({ includeSource = false } = {}) {
     sourceFileName: state.sourceFileName,
     sourceMode: state.sourceMode,
     sourceRegionCount: currentSourceRegionCount(),
+    hatchObjectCount: Number(state.hatchObjectCount || 0),
+    hatchHoleCount: Number(state.hatchHoleCount || 0),
+    removedOverlapRegions: Number(state.removedOverlapRegions || 0),
+    baseRegionCount: Number(state.baseRegionCount || 0),
+    splitRegionCount: Number(state.splitRegionCount || state.regions.length || 0),
+    detectedJointCount: Number(state.detectedJointCount || state.bands.filter((band) => band.source === 'dxf-joint-hatch').length || 0),
+    exactCount: Number(state.exactCount || 0),
     removedHatchKeys: [...state.removedHatchKeys],
     settings: structuredClone(state.settings),
     regions: structuredClone(state.regions),
@@ -973,6 +980,13 @@ function restoreProject(project, keepCad = true) {
     };
   });
   state.sourceRegionCount = Number(project.sourceRegionCount || state.regions.length || 0);
+  state.sourceMode = project.sourceMode || (state.cad ? 'hatch' : 'cloud');
+  state.hatchObjectCount = Number(project.hatchObjectCount ?? state.hatchObjectCount ?? 0);
+  state.hatchHoleCount = Number(project.hatchHoleCount ?? state.hatchHoleCount ?? 0);
+  state.removedOverlapRegions = Number(project.removedOverlapRegions ?? state.removedOverlapRegions ?? 0);
+  state.baseRegionCount = Number(project.baseRegionCount ?? state.baseRegionCount ?? 0);
+  state.splitRegionCount = Number(project.splitRegionCount ?? state.splitRegionCount ?? state.regions.length);
+  state.exactCount = Number(project.exactCount ?? state.exactCount ?? state.regions.length);
   state.removedHatchKeys = new Set(Array.isArray(project.removedHatchKeys) ? project.removedHatchKeys.map(String) : []);
   state.groups = (project.groups || []).map((group) => ({
     ...normalizeControl(group),
@@ -986,6 +1000,7 @@ function restoreProject(project, keepCad = true) {
     if (!members.some((region) => region.id === group.anchorRegionId)) group.anchorRegionId = members[0]?.id || null;
   }
   state.bands = (project.bands || []).map((band) => ({ ...band, enabled: band.enabled !== false }));
+  state.detectedJointCount = Number(project.detectedJointCount ?? state.detectedJointCount ?? state.bands.filter((band) => band.source === 'dxf-joint-hatch').length);
   state.layerMapping = { ...state.layerMapping, ...(project.layerMapping || {}) };
   state.sourceFileName = project.sourceFileName || state.sourceFileName;
   if (project.cad) state.cad = structuredClone(project.cad);
@@ -1121,8 +1136,10 @@ function updateSourceMetrics() {
       : state.sourceMode === 'cad-pick'
         ? `${projectPrefix}${state.sourceFileName} · CAD 閉合區域取區模式`
       : `${projectPrefix}${state.sourceFileName} · ${state.regions.length} 個最小區域`;
-  if (state.cad) {
-    const blockNote = state.cad.expandedInsertInstances ? ` · 展開 ${state.cad.expandedInsertInstances.toLocaleString()} 個圖塊實例` : '';
+  const hasStoredHatchMetrics = state.sourceMode === 'hatch'
+    && (state.hatchObjectCount || state.baseRegionCount || state.detectedJointCount || state.hatchHoleCount);
+  if (state.cad || hasStoredHatchMetrics) {
+    const blockNote = state.cad?.expandedInsertInstances ? ` · 展開 ${state.cad.expandedInsertInstances.toLocaleString()} 個圖塊實例` : '';
     dom.sourceDetail.textContent = state.sourceMode === 'hatch'
       ? `${state.hatchObjectCount} HATCH · ${state.baseRegionCount} 原區 → ${state.regions.length} 最小倉 · ${state.detectedJointCount} 條20mm縫 · ${state.hatchHoleCount} 孔洞 · ${state.layerMapping.region}`
       : `${state.cad.entities.length.toLocaleString()} 個可繪實體 · ${state.cad.layers.length} 圖層${blockNote}`;
