@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>屋面瓷磚智能排布器 v1.6.5</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand-block">
+      <div class="brand-mark">RT</div>
+      <div>
+        <h1>屋面瓷磚智能排布器 <small class="version-tag">v1.6.5</small></h1>
+        <p id="sourceSubtitle">正在載入 roof tile with area hatched.dxf…</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <span id="sourceBadge" class="status-badge status-loading">載入中</span>
+      <button class="button secondary" id="openCadButton">匯入 DWG / DXF</button>
+      <span id="autosaveStatus" class="autosave-status">自動保存於此裝置</span>
+      <input id="cadFileInput" type="file" accept=".dwg,.dxf" hidden />
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar left-sidebar">
+      <section class="panel source-panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">01 · 圖紙來源</span><h2>模型與圖層</h2></div>
+          <button class="icon-button" id="layerMappingButton" title="設定圖層">圖層</button>
+        </div>
+        <div class="source-summary">
+          <div class="source-icon" id="sourceIcon">DXF</div>
+          <div><strong id="sourceFileName">roof tile with area hatched.dxf</strong><span id="sourceDetail">正在讀取鋪磚 HATCH</span></div>
+        </div>
+        <div class="metric-grid compact">
+          <div><span>最小排磚倉</span><strong id="regionCountMetric">—</strong></div>
+          <div><span>原區→切分後</span><strong id="exactCountMetric">—</strong></div>
+          <div><span>長邊沿 X</span><strong id="horizontalCountMetric">—</strong></div>
+          <div><span>長邊沿 Y</span><strong id="verticalCountMetric">—</strong></div>
+        </div>
+        <div class="project-box">
+          <div class="version-box-title"><strong>圖紙 project</strong><span id="projectStatus">0 個 project</span></div>
+          <select id="projectSelect" aria-label="目前 project"><option value="">目前 project</option></select>
+          <div class="project-actions">
+            <button class="button mini primary" id="newProjectButton" type="button">新建 project</button>
+            <button class="button mini" id="renameProjectButton" type="button" disabled>改名</button>
+            <button class="button mini danger" id="deleteProjectButton" type="button" disabled>刪除</button>
+          </div>
+          <p class="helper-text">每張圖紙都是獨立 project；匯入新 DWG／DXF 不會覆蓋舊 project。此裝置最多保存 50 個 project，實際仍受 iPad 瀏覽器可用儲存空間影響。</p>
+        </div>
+        <div id="sourceNotice" class="notice info">先顯示 QA 後備區域；DXF 載入後以標定 HATCH 作為鋪磚範圍，再用嚴格的20 mm伸縮縫規則切成最小排磚倉。</div>
+        <div class="version-box">
+          <div class="version-box-title"><strong>命名版本</strong><span id="versionStatus">0 個已保存版本</span></div>
+          <select id="savedVersionSelect" aria-label="已保存版本"><option value="">選擇已保存版本</option></select>
+          <div class="version-actions">
+            <button class="button mini primary" id="saveNamedVersionButton" type="button">保存新版本</button>
+            <button class="button mini" id="loadNamedVersionButton" type="button" disabled>載入</button>
+            <button class="button mini danger" id="deleteNamedVersionButton" type="button" disabled>刪除</button>
+          </div>
+          <p class="helper-text">保存新版本時輸入名稱；同一圖紙可保存多個排布、合併及起點設定。</p>
+        </div>
+        <div class="backup-actions">
+          <button class="button mini" id="exportProjectButton" type="button">導出佈局 JSON</button>
+          <button class="button mini" id="importProjectButton" type="button">導入佈局 JSON</button>
+          <input id="projectFileInput" type="file" accept=".json,application/json" hidden />
+        </div>
+        <div class="sync-box">
+          <div class="version-box-title"><strong>雲端同步</strong><span id="syncStatus">未設定同步碼</span></div>
+          <label class="full-width-label">同步碼（各設備輸入相同文字）<input id="syncKeyInput" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="例如：屋面 A-2026" /></label>
+          <div class="version-actions">
+            <button class="button mini primary" id="uploadSyncButton" type="button">上傳同步</button>
+            <button class="button mini" id="downloadSyncButton" type="button">從雲端載入</button>
+          </div>
+          <p class="helper-text">保存新版本後會自動上傳；其他 iPad／電腦輸入同一同步碼，再按「從雲端載入」。同步碼就是存取密鑰，請自行保管。</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">02 · 磚與縫</span><h2>排布模數</h2></div>
+          <button class="icon-button" id="resetTileSettings" title="重設預設值">重設</button>
+        </div>
+        <div class="form-grid two-columns">
+          <label>磚長邊（mm）<input id="tileLongInput" type="number" min="1" step="1" value="600" /></label>
+          <label>磚短邊（mm）<input id="tileShortInput" type="number" min="1" step="1" value="300" /></label>
+          <label>直縫 X（mm）<input id="jointXInput" type="number" min="0" step="1" value="5" /></label>
+          <label>橫縫 Y（mm）<input id="jointYInput" type="number" min="0" step="1" value="5" /></label>
+          <label>錯縫距離（mm）<input id="staggerOffsetInput" type="number" min="0" step="1" value="300" /></label>
+          <label>最小切磚（mm）<input id="minCutInput" type="number" min="0" step="1" value="100" /></label>
+          <label>尺寸精度<select id="dimensionDigitsInput"><option value="0" selected>1 mm</option></select></label>
+        </div>
+        <p class="helper-text tile-helper">長、短邊尺寸只輸入一次；預設為錯縫排布，每排沿長方向錯開 300 mm。每個區域可在右側選擇長邊沿 X 或沿 Y。</p>
+        <div class="toggle-list">
+          <label class="toggle"><input id="staggerEnabledInput" type="checkbox" checked /><span></span>錯縫排布</label>
+          <label class="toggle"><input id="showFullTilesInput" type="checkbox" checked /><span></span>顯示完整磚</label>
+          <label class="toggle"><input id="showCutLabelsInput" type="checkbox" checked /><span></span>放大時標示非整磚</label>
+          <label class="toggle"><input id="showCadInput" type="checkbox" checked /><span></span>顯示匯入 CAD 線</label>
+          <label class="toggle"><input id="keepArchitectureInput" type="checkbox" checked /><span></span>建築線置頂（避免被磚線遮住）</label>
+        </div>
+      </section>
+
+      <section class="panel regions-panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">03 · 平面區域操作</span><h2>合併／拆分</h2></div>
+          <span id="selectedRegionCount" class="count-pill">0 已選</span>
+        </div>
+        <div class="region-toolbar compact-actions">
+          <button class="button mini accent" id="mergeRegionsButton">合併排布</button>
+          <button class="button mini" id="splitRegionsButton">取消合併</button>
+          <button class="button mini danger" id="deleteRegionButton" disabled>刪除新增區域</button>
+          <button class="button mini danger" id="removeHatchButton" disabled>移除 HATCH 區域</button>
+        </div>
+        <p class="selection-hint" id="selectionHint">電腦：單點選區；左至右拖曳是窗口選取，右至左拖曳是交叉選取，Ctrl／Shift 可加入選取。選好後可移除不需要的 HATCH 區域。iPad／手機：長按區域後再點相鄰區域。</p>
+      </section>
+    </aside>
+
+    <section class="stage-shell">
+      <div class="stage-toolbar">
+        <div class="tool-group">
+          <button class="tool-button active" data-mode="select" title="選擇區域 (V)">選擇</button>
+          <button class="tool-button" data-mode="pan" title="平移視圖 (H)">平移</button>
+          <button class="tool-button" data-mode="origin" title="點選排布起點 (O)">定起點</button>
+          <button class="tool-button" data-mode="band" title="拖動畫分界帶 (B)">畫分界</button>
+          <button class="tool-button" data-mode="pickRegion" title="點選區域內部或閉合邊線加入排磚區 (A)">CAD取區</button>
+          <button class="tool-button" data-mode="pickBoundary" title="直接選取閉合多段線、圓、橢圓或 HATCH 邊界">選閉合線</button>
+        </div>
+        <div class="tool-divider"></div>
+        <div class="tool-group">
+          <button class="tool-button" id="fitViewButton" title="顯示全部 (F)">全圖</button>
+          <button class="tool-button" id="zoomSelectionButton" title="縮放到所選區域">所選</button>
+          <button class="tool-button" id="undoButton" title="復原 (Ctrl+Z)">復原</button>
+        </div>
+        <div class="stage-instruction" id="stageInstruction">點選區域；Ctrl/Command 或 Shift 可多選，滾輪縮放，中鍵拖移。</div>
+      </div>
+      <div class="canvas-frame" id="canvasFrame">
+        <canvas id="layoutCanvas" tabindex="0"></canvas>
+        <div class="canvas-overlay top-left">
+          <div class="view-chip"><span>比例</span><strong id="viewScaleLabel">—</strong></div>
+          <div class="view-chip"><span>座標</span><strong id="cursorCoordinateLabel">—</strong></div>
+        </div>
+        <div class="canvas-overlay top-right"><div id="calculationBadge" class="calculation-badge">準備中</div></div>
+        <div id="canvasTooltip" class="canvas-tooltip" hidden></div>
+      </div>
+      <footer class="stage-statusbar">
+        <span><i class="legend swatch-full"></i>完整磚</span>
+        <span><i class="legend swatch-cut"></i>非整磚</span>
+        <span><i class="legend swatch-carry"></i>跨縫續用</span>
+        <span><i class="legend swatch-small"></i>小於最小尺寸</span>
+        <span class="status-spacer"></span>
+        <span id="stageStatusText">正在建立模型…</span>
+      </footer>
+    </section>
+
+    <aside class="sidebar right-sidebar">
+      <section class="panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">04 · 起點與方向</span><h2>排布組</h2></div>
+          <span id="activeGroupBadge" class="count-pill">—</span>
+        </div>
+        <label class="full-width-label">目前排布組<select id="activeGroupSelect"></select></label>
+        <div class="toggle-list horizontal">
+          <label class="toggle"><input id="unifiedOriginInput" type="checkbox" checked /><span></span>統一起點</label>
+          <label class="toggle"><input id="carryAcrossInput" type="checkbox" checked /><span></span>跨分界切開續排</label>
+        </div>
+        <div class="form-grid two-columns origin-grid">
+          <label>起點 X（mm）<input id="originXInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" /></label>
+          <label>起點 Y（mm）<input id="originYInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" /></label>
+        </div>
+        <div class="nudge-card">
+          <div class="nudge-title"><strong>四向移動（mm）</strong><span>輸入數字，再按同方向箭頭</span></div>
+          <div class="nudge-layout">
+            <div class="nudge-direction nudge-up"><label>上<input id="nudgeUpInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" value="0" /></label><button id="nudgeButtonUp" class="nudge-button" title="按輸入數字向上移動">▲</button></div>
+            <div class="nudge-direction nudge-left"><label>左<input id="nudgeLeftInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" value="0" /></label><button id="nudgeButtonLeft" class="nudge-button" title="按輸入數字向左移動">◀</button></div>
+            <div class="nudge-direction nudge-right"><label>右<input id="nudgeRightInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" value="0" /></label><button id="nudgeButtonRight" class="nudge-button" title="按輸入數字向右移動">▶</button></div>
+            <div class="nudge-direction nudge-down"><label>下<input id="nudgeDownInput" type="number" inputmode="numeric" enterkeyhint="done" step="1" value="0" /></label><button id="nudgeButtonDown" class="nudge-button" title="按輸入數字向下移動">▼</button></div>
+          </div>
+          <div class="move-confirm-row"><span>按確認套用一次移動，完成後四個數字清零。</span><button id="confirmMoveButton" class="button mini primary" type="button">確認移動</button></div>
+        </div>
+        <div class="smart-optimize-row">
+          <button id="optimizeOriginButton" class="button primary">智能優化起點</button>
+          <span>優先避免小於設定最小尺寸的磚，再減少總切磚數。</span>
+        </div>
+        <div class="form-grid two-columns">
+          <label>所選區域／完整合併組磚長邊方向
+            <select id="selectedOrientationInput">
+              <option value="mixed" disabled>混合方向（選擇後會統一）</option>
+              <option value="0">沿 X／左右（長 × 短）</option>
+              <option value="90">沿 Y／上下（短 × 長）</option>
+            </select>
+          </label>
+          <label>微調步距（mm）<input id="nudgeStepInput" type="number" min="1" step="1" value="1" /></label>
+        </div>
+        <div class="orientation-helper">
+          <div id="orientationPreview" class="orientation-preview long-x"><span class="mini-tile"></span><div><strong id="orientationPreviewTitle">長邊沿 X</strong><small id="orientationPreviewText">600 × 300 mm</small></div></div>
+          <button id="rotateSelectedButton" class="button mini" title="將所選區域各自旋轉 90° (R)">旋轉所選 90°</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">05 · 分倉與跨區</span><h2>標定伸縮縫及續排</h2></div>
+          <button class="icon-button" id="autoDetectBandsButton" title="顯示目前伸縮縫標定規則">標定規則</button>
+        </div>
+        <div class="logic-note">
+          <strong>先按標定伸縮縫切倉，再建立持續排布組</strong>
+          <span>鋪磚範圍取自使用者標定 HATCH；伸縮縫只接受「RRIA - floor finish」圖層、ANSI32、寬20±0.75 mm、長度至少250 mm的細長 HATCH。1–5 mm線條及其他樓面 HATCH均忽略。選取縫／渠兩側的最小倉並合併後，會一直共用同一起點、錯縫相位及跨空隙續排，直至按「獨立排布」。</span>
+        </div>
+        <p class="helper-text">例：600 mm磚在左倉使用592.3 mm，跳過20 mm伸縮縫或渠道後，右倉同一塊磚接續7.7 mm；隱藏的跨區關係不會畫成黑色帶。</p>
+        <div id="bandList" class="band-list"></div>
+        <details class="advanced-controls">
+          <summary>進階：手動畫額外斷帶（通常不需要）</summary>
+          <div class="band-presets">
+            <button data-band-width="20" data-band-type="20mm 手動斷帶">20</button>
+            <button data-band-width="225" data-band-type="225mm 手動斷帶">225</button>
+            <button data-band-width="325" data-band-type="325mm 手動斷帶">325</button>
+          </div>
+          <div class="form-grid two-columns">
+            <label>繪製寬度（mm）<input id="bandWidthInput" type="number" min="1" step="1" value="20" /></label>
+            <label>分界名稱<input id="bandTypeInput" type="text" value="手動斷帶" /></label>
+          </div>
+          <label class="toggle single-line"><input id="bandGlobalInput" type="checkbox" /><span></span>此分界對所有排布組生效</label>
+          <p class="helper-text">只有當 HATCH 沒有把空隙扣除時才使用工具列「畫分界」。</p>
+        </details>
+      </section>
+
+      <section class="panel results-panel">
+        <div class="panel-heading">
+          <div><span class="eyebrow">06 · 即時結果</span><h2>切磚審核</h2></div>
+          <button class="icon-button" id="exportCsvButton">CSV</button>
+        </div>
+        <div class="metric-grid result-metrics">
+          <div><span>概念整磚</span><strong id="conceptualTileMetric">—</strong></div>
+          <div><span>完整磚</span><strong id="fullTileMetric">—</strong></div>
+          <div><span>非整磚片</span><strong id="cutPieceMetric">—</strong></div>
+          <div><span>跨縫續用</span><strong id="continuationMetric">—</strong></div>
+          <div><span>最小片尺寸</span><strong id="minPieceMetric">—</strong></div>
+          <div><span>小尺寸警告</span><strong id="smallPieceMetric">—</strong></div>
+        </div>
+        <div id="warningList" class="warning-list"></div>
+        <div class="results-toolbar">
+          <label><input id="cutSelectedOnlyInput" type="checkbox" />只看所選</label>
+          <label><input id="cutSmallOnlyInput" type="checkbox" />只看小尺寸</label>
+          <input id="cutSearchInput" type="search" placeholder="搜尋編號" />
+        </div>
+        <div class="cut-table-wrap">
+          <table class="cut-table">
+            <thead><tr><th>區域</th><th>整磚 / 片</th><th>尺寸 mm</th><th>狀態</th></tr></thead>
+            <tbody id="cutTableBody"></tbody>
+          </table>
+        </div>
+        <div class="export-row">
+          <button class="button secondary" id="exportSvgButton">輸出 SVG</button>
+          <button class="button secondary" id="exportDxfButton">輸出 DXF</button>
+          <button class="button secondary" id="printButton">列印 / PDF</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="layerDialog" class="modal-dialog">
+    <form method="dialog">
+      <div class="dialog-header"><div><span class="eyebrow">CAD HATCH</span><h2>選擇鋪磚 HATCH 圖層</h2></div><button class="dialog-close" value="cancel">×</button></div>
+      <p class="dialog-intro">每個鋪磚 HATCH 的連通部分先成為精確原區；HATCH孔洞會自動扣除，再由嚴格標定的20 mm伸縮縫切成最小排磚倉。</p>
+      <div class="dialog-grid single-column">
+        <label>鋪磚 HATCH 圖層<select id="regionLayerSelect"></select></label>
+      </div>
+      <div id="layerSummary" class="layer-summary"></div>
+      <div class="dialog-actions"><button class="button" value="cancel">取消</button><button class="button primary" id="applyLayerMappingButton" value="default">以此 HATCH 建立區域</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="helpDialog" class="modal-dialog help-dialog">
+    <form method="dialog">
+      <div class="dialog-header"><div><span class="eyebrow">使用方法</span><h2>快速工作流程</h2></div><button class="dialog-close" value="cancel">×</button></div>
+      <ol>
+        <li>在 CAD 內以 HATCH 清楚標定所有需要鋪磚的範圍，再另存為 ASCII DXF。</li>
+        <li>應用以鋪磚 HATCH 建立原區並扣除孔洞；只將 RRIA - floor finish／ANSI32／20±0.75 mm／長度至少250 mm的HATCH視為伸縮縫，再切成最小排磚倉。</li>
+        <li>輸入磚長邊、短邊、普通磚縫及錯縫距離；預設每排沿長方向錯開 300 mm。</li>
+        <li>需要跨伸縮縫或渠道延續時，按住 Ctrl/Command 或 Shift 點選多個最小倉，再按「合併排布」。合併關係、共同起點及錯縫相位會持續保存，直到執行「獨立排布」。</li>
+        <li>可按「智能優化起點」，也可手動點選起點；點選起點會吸附現存 CAD 線、鋪磚區邊界或端點，方向鍵或四個移動鍵按 1 mm 步距微調。</li>
+            <li>如有漏掉的鋪磚空間，最好回到 CAD 補 HATCH；也可用工具列「CAD取區」點入閉合區域或點閉合邊線補建。</li>
+            <li>設定會自動保存於目前裝置的瀏覽器；在同一台 iPad 重新開啟同一份圖紙會自動恢復。</li>
+        <li>保持「建築線置頂」開啟，牆線、門線、設備線及圖塊會顯示在排磚線之上。</li>
+        <li>放大核對非整磚尺寸與小於最小尺寸的紅色HATCH，再輸出 SVG、可由AutoCAD直接開啟的DXF、CSV或列印PDF。</li>
+      </ol>
+    </form>
+  </dialog>
+
+  <dialog id="touchActionDialog" class="modal-dialog touch-action-dialog">
+    <form method="dialog">
+      <div class="dialog-header">
+        <div><span class="eyebrow">觸控操作</span><h2 id="touchActionTitle">區域操作</h2></div>
+        <button class="dialog-close" value="cancel" aria-label="關閉">×</button>
+      </div>
+      <p id="touchActionText" class="dialog-intro"></p>
+      <div class="dialog-actions touch-action-buttons">
+        <button id="touchActionContinueButton" class="button primary" type="button">開始合併選取</button>
+        <button id="touchActionMoveButton" class="button primary" type="button">移動</button>
+        <button id="touchActionSplitButton" class="button" type="button">取消合併</button>
+        <button class="button secondary" value="cancel">取消</button>
+      </div>
+    </form>
+  </dialog>
+
+  <button id="helpButton" class="floating-help" title="使用說明">?</button>
+  <div id="toastContainer" class="toast-container"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
