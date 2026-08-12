@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light" />
   <meta name="roof-tile-sync-endpoint" content="https://roof-tile-layout-sync.ninglee1023.workers.dev/api/sync" />
-  <title>屋面瓷磚智能排布器 v1.6.5</title>
+  <title>屋面瓷磚智能排布器 v1.6.6</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -13,7 +13,7 @@
     <div class="brand-block">
       <div class="brand-mark">RT</div>
       <div>
-        <h1>屋面瓷磚智能排布器 <small class="version-tag">v1.6.5</small></h1>
+        <h1>屋面瓷磚智能排布器 <small class="version-tag">v1.6.6</small></h1>
         <p id="sourceSubtitle">正在載入 roof tile with area hatched.dxf…</p>
       </div>
     </div>
@@ -83,7 +83,7 @@
             <button class="button mini primary" id="uploadSyncButton" type="button">上傳同步</button>
             <button class="button mini" id="downloadSyncButton" type="button">從雲端載入</button>
           </div>
-          <p class="helper-text">保存新版本後會自動上傳；其他 iPad／電腦輸入同一同步碼，再按「從雲端載入」。同步碼就是存取密鑰，請自行保管。</p>
+          <p class="helper-text">同一同步碼就是同一個共用工作區：會同步所有 project、排布設定、命名版本及刪除記錄。不同同步碼互相隔離；它不是登入帳號，知道同步碼即可存取，請自行保管。</p>
         </div>
       </section>
 
@@ -316,6 +316,6 @@
 
   <button id="helpButton" class="floating-help" title="使用說明">?</button>
   <div id="toastContainer" class="toast-container"></div>
-  <script type="module" src="js/app.js?v=20260811-sync-project-recovery8"></script>
+  <script type="module" src="js/app.js?v=20260812-sync-delete-tombstone9"></script>
 </body>
 </html>
