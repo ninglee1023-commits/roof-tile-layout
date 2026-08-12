@@ -85,6 +85,7 @@ const RECOVERY_STORE_NAME = 'recovery';
 const PROJECTS_FALLBACK_KEY = 'roof-tile-layout:projects:v1';
 const PROJECT_MAX_COUNT = 50;
 const BACKUP_SCHEMA_VERSION = 1;
+const DELETED_PROJECTS_KEY = 'roof-tile-layout:deleted-projects:v1';
 const RECOVERY_SCHEMA_VERSION = 1;
 const RECOVERY_MAX_PER_PROJECT = 10;
 const RECOVERY_LOCAL_KEY = 'roof-tile-layout:recovery:v1';
@@ -794,10 +795,15 @@ async function activateProjectForCurrentSource({ forceNew = false, name = '', re
 
 async function mergeSyncedProjects(remoteProjects = [], { preferRemote = true } = {}) {
   const remoteToLocalId = new Map();
-  if (!Array.isArray(remoteProjects) || !remoteProjects.length) return remoteToLocalId;
+  const tombstones = readDeletedProjectTombstones();
 
   const localRecords = state.projectCatalog.map(normalizeProjectRecord).filter(Boolean)
+    .filter((project) => !projectSuppressedByTombstones(project, tombstones))
     .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  if (!Array.isArray(remoteProjects) || !remoteProjects.length) {
+    if (localRecords.length !== state.projectCatalog.length) await writeProjectCatalog(localRecords);
+    return remoteToLocalId;
+  }
   const byId = new Map(localRecords.map((project) => [project.id, project]));
   const bySyncKey = new Map();
   const duplicateLocalIds = new Set();
@@ -811,6 +817,7 @@ async function mergeSyncedProjects(remoteProjects = [], { preferRemote = true } 
   for (const remote of remoteProjects) {
     const normalized = normalizeProjectRecord(remote);
     if (!normalized) continue;
+    if (projectSuppressedByTombstones(normalized, tombstones)) continue;
     const remoteKey = projectSyncKey(normalized);
     let local = bySyncKey.get(remoteKey);
     if (!local) local = byId.get(normalized.id);
@@ -945,9 +952,11 @@ async function deleteCurrentProject() {
   if (!record) return toast('目前沒有可刪除的 project。', 'warning');
   if (state.projectCatalog.length <= 1) return toast('至少保留一個 project；如要開始新圖紙，直接按「新建 project」。', 'warning');
   if (!window.confirm(`確定刪除 project「${record.name}」？此 project 的排布設定會一併刪除。`)) return;
+  const tombstones = markProjectDeleted(record);
   const next = state.projectCatalog.filter((project) => project.id !== record.id);
   const nextProject = next[0];
   await writeProjectCatalog(next);
+  writeNamedVersions(filterDeletedNamedVersions(readNamedVersions(), tombstones), { sync: false });
   state.projectId = null;
   state.projectName = '';
   await switchProject(nextProject.id);
@@ -978,6 +987,93 @@ function setSyncStatus(message, type = '') {
   dom.syncStatus.className = type ? `sync-status ${type}` : 'sync-status';
 }
 
+function readDeletedProjectTombstones() {
+  if (typeof localStorage === 'undefined') return {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_PROJECTS_KEY) || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    console.warn('Unable to read deleted project records', error);
+    return {};
+  }
+}
+
+function writeDeletedProjectTombstones(tombstones) {
+  if (typeof localStorage === 'undefined') return false;
+  try {
+    localStorage.setItem(DELETED_PROJECTS_KEY, JSON.stringify(tombstones || {}));
+    return true;
+  } catch (error) {
+    console.warn('Unable to write deleted project records', error);
+    return false;
+  }
+}
+
+function mergeDeletedProjectTombstones(remote = {}) {
+  const merged = readDeletedProjectTombstones();
+  for (const [key, value] of Object.entries(remote || {})) {
+    if (!value || typeof value !== 'object') continue;
+    const incomingAt = Date.parse(value.deletedAt || '') || 0;
+    const currentAt = Date.parse(merged[key]?.deletedAt || '') || 0;
+    if (!merged[key] || incomingAt >= currentAt) {
+      merged[key] = {
+        syncProjectKey: String(value.syncProjectKey || key),
+        deletedAt: value.deletedAt || new Date().toISOString(),
+        projectName: String(value.projectName || ''),
+        sourceFileName: String(value.sourceFileName || '')
+      };
+    }
+  }
+  writeDeletedProjectTombstones(merged);
+  return merged;
+}
+
+function markProjectDeleted(record) {
+  if (!record) return readDeletedProjectTombstones();
+  const tombstones = readDeletedProjectTombstones();
+  const key = projectSyncKey(record);
+  tombstones[key] = {
+    syncProjectKey: key,
+    deletedAt: new Date().toISOString(),
+    projectName: record.name || '',
+    sourceFileName: record.sourceFileName || ''
+  };
+  writeDeletedProjectTombstones(tombstones);
+  return tombstones;
+}
+
+function projectSuppressedByTombstones(record, tombstones = readDeletedProjectTombstones()) {
+  const key = projectSyncKey(record);
+  const tombstone = tombstones[key];
+  if (!tombstone) return false;
+  const createdAt = Date.parse(record.createdAt || '') || 0;
+  const deletedAt = Date.parse(tombstone.deletedAt || '') || 0;
+  // A project deliberately created again after deletion is a new project and
+  // may reuse the same drawing/name key.
+  return createdAt <= deletedAt;
+}
+
+function filterDeletedProjects(projects, tombstones = readDeletedProjectTombstones()) {
+  return (Array.isArray(projects) ? projects : []).filter((project) => (
+    !projectSuppressedByTombstones(project, tombstones)
+  ));
+}
+
+function filterDeletedNamedVersions(versions, tombstones = readDeletedProjectTombstones()) {
+  const filtered = {};
+  for (const [sourceKey, list] of Object.entries(versions || {})) {
+    if (!Array.isArray(list)) continue;
+    filtered[sourceKey] = list.filter((item) => {
+      const key = String(item?.projectSyncKey || item?.project?.syncProjectKey || '');
+      if (!key || !tombstones[key]) return true;
+      const savedAt = Date.parse(item.savedAt || '') || 0;
+      const deletedAt = Date.parse(tombstones[key].deletedAt || '') || 0;
+      return savedAt > deletedAt;
+    });
+  }
+  return filtered;
+}
+
 function buildBackupBundle() {
   return {
     schema: BACKUP_SCHEMA_VERSION,
@@ -986,20 +1082,29 @@ function buildBackupBundle() {
     activeProjectId: state.projectId,
     projects: cloneProjectData(state.projectCatalog),
     currentProject: snapshotProject({ includeSource: true }),
-    namedVersions: readNamedVersions()
+    namedVersions: readNamedVersions(),
+    deletedProjectTombstones: readDeletedProjectTombstones()
   };
 }
 
 function buildSyncBundle() {
+  const tombstones = readDeletedProjectTombstones();
+  const projects = filterDeletedProjects(state.projectCatalog, tombstones);
+  const active = findProjectRecord();
+  const activeDeleted = !active || projectSuppressedByTombstones(active, tombstones);
+  const fallback = projects[0] || null;
+  const fallbackPayload = fallback ? projectForSync(fallback).project : null;
+  const currentProject = activeDeleted && fallbackPayload ? fallbackPayload : snapshotProject();
   return {
     schema: BACKUP_SCHEMA_VERSION,
     projectType: 'roof-tile-layout-sync',
     updatedAt: new Date().toISOString(),
-    activeProjectId: state.projectId,
-    sourceFileName: state.sourceFileName,
-    currentProject: snapshotProject(),
-    projects: state.projectCatalog.map(projectForSync),
-    namedVersions: readNamedVersions()
+    activeProjectId: activeDeleted && fallback ? fallback.id : (activeDeleted ? null : state.projectId),
+    sourceFileName: currentProject.sourceFileName || state.sourceFileName,
+    currentProject,
+    projects: projects.map(projectForSync),
+    namedVersions: filterDeletedNamedVersions(readNamedVersions(), tombstones),
+    deletedProjectTombstones: tombstones
   };
 }
 
@@ -1025,8 +1130,13 @@ async function importProjectBackup(file) {
       throw new Error('不是屋面瓷磚排布 JSON 備份。');
     }
     pushHistory();
-    if (Array.isArray(bundle.projects) && bundle.projects.length) await writeProjectCatalog(bundle.projects);
-    if (bundle.namedVersions && typeof bundle.namedVersions === 'object') writeNamedVersions(bundle.namedVersions, { sync: false });
+    const tombstones = mergeDeletedProjectTombstones(bundle.deletedProjectTombstones);
+    if (Array.isArray(bundle.projects) && bundle.projects.length) {
+      await writeProjectCatalog(filterDeletedProjects(bundle.projects, tombstones));
+    }
+    if (bundle.namedVersions && typeof bundle.namedVersions === 'object') {
+      writeNamedVersions(filterDeletedNamedVersions(bundle.namedVersions, tombstones), { sync: false });
+    }
     const activeProject = Array.isArray(bundle.projects)
       ? state.projectCatalog.find((item) => item.id === bundle.activeProjectId) || state.projectCatalog[0]
       : null;
@@ -1226,9 +1336,17 @@ async function mergeRemoteSyncStateBeforeUpload(syncKey) {
   }
   const payload = result?.payload;
   if (!payload || payload.projectType !== 'roof-tile-layout-sync') return;
-  const remoteProjects = Array.isArray(payload.projects) ? [...payload.projects] : [];
+  const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones);
+  const remoteProjects = filterDeletedProjects(payload.projects, tombstones);
   if (payload.activeProjectId && payload.currentProject
-    && !remoteProjects.some((item) => String(item?.id || '') === String(payload.activeProjectId))) {
+    && !remoteProjects.some((item) => String(item?.id || '') === String(payload.activeProjectId))
+    && !projectSuppressedByTombstones({
+      id: payload.activeProjectId,
+      name: projectNameFromFile(payload.currentProject.sourceFileName),
+      sourceFileName: payload.currentProject.sourceFileName,
+      sourceRegionCount: payload.currentProject.sourceRegionCount,
+      project: payload.currentProject
+    }, tombstones)) {
     remoteProjects.push({
       id: payload.activeProjectId,
       name: projectNameFromFile(payload.currentProject.sourceFileName),
@@ -1238,7 +1356,9 @@ async function mergeRemoteSyncStateBeforeUpload(syncKey) {
     });
   }
   await mergeSyncedProjects(remoteProjects, { preferRemote: false });
-  if (payload.namedVersions && typeof payload.namedVersions === 'object') mergeNamedVersions(payload.namedVersions);
+  if (payload.namedVersions && typeof payload.namedVersions === 'object') {
+    mergeNamedVersions(filterDeletedNamedVersions(payload.namedVersions, tombstones));
+  }
 
   // The explicit upload represents the current device's latest edit. Put it
   // back into the merged catalog after importing older remote records.
@@ -1266,11 +1386,21 @@ async function downloadSync() {
   try {
     const result = await syncRequest('get', syncKey);
     const payload = result.payload;
-    const project = payload?.currentProject;
+    let project = payload?.currentProject;
     if (!project || project.projectType !== 'roof-tile-layout') throw new Error('雲端沒有可用的屋面佈局。');
     pushHistory();
-    const remoteProjectRecords = Array.isArray(payload.projects) ? [...payload.projects] : [];
-    if (payload.activeProjectId && !remoteProjectRecords.some((item) => String(item?.id || '') === String(payload.activeProjectId))) {
+    const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones);
+    const remoteProjectRecords = filterDeletedProjects(payload.projects, tombstones);
+    const activeCandidate = {
+      id: payload.activeProjectId,
+      name: projectNameFromFile(project.sourceFileName),
+      sourceFileName: project.sourceFileName,
+      sourceRegionCount: project.sourceRegionCount,
+      project
+    };
+    if (payload.activeProjectId
+      && !remoteProjectRecords.some((item) => String(item?.id || '') === String(payload.activeProjectId))
+      && !projectSuppressedByTombstones(activeCandidate, tombstones)) {
       remoteProjectRecords.push({
         id: payload.activeProjectId,
         name: projectNameFromFile(project.sourceFileName),
@@ -1280,7 +1410,13 @@ async function downloadSync() {
       });
     }
     const remoteToLocalId = await mergeSyncedProjects(remoteProjectRecords);
-    if (payload.namedVersions && typeof payload.namedVersions === 'object') mergeNamedVersions(payload.namedVersions);
+    if (projectSuppressedByTombstones(activeCandidate, tombstones)) {
+      const replacement = remoteProjectRecords.find((item) => item?.project && !projectSuppressedByTombstones(item, tombstones));
+      if (replacement?.project) project = replacement.project;
+    }
+    if (payload.namedVersions && typeof payload.namedVersions === 'object') {
+      mergeNamedVersions(filterDeletedNamedVersions(payload.namedVersions, tombstones));
+    }
     let restoredSource = false;
     if (project.sourceSyncId) {
       try {
@@ -1364,7 +1500,8 @@ function namedVersionIdentity(item = {}, sourceKey = '') {
 
 function mergeNamedVersions(remoteVersions = {}) {
   const localVersions = readNamedVersions();
-  const merged = cloneProjectData(localVersions);
+  const tombstones = readDeletedProjectTombstones();
+  const merged = filterDeletedNamedVersions(cloneProjectData(localVersions), tombstones);
   const localKeys = Object.keys(localVersions);
   const keyFor = (remoteKey) => localKeys.find((localKey) => (
     normalizeSyncText(localKey) === normalizeSyncText(remoteKey)
@@ -1376,6 +1513,12 @@ function mergeNamedVersions(remoteVersions = {}) {
     const current = Array.isArray(merged[targetKey]) ? [...merged[targetKey]] : [];
     for (const remoteItem of remoteList) {
       if (!remoteItem || typeof remoteItem !== 'object' || !remoteItem.project) continue;
+      const projectKey = String(remoteItem.projectSyncKey || remoteItem.project?.syncProjectKey || '');
+      if (projectKey && tombstones[projectKey]) {
+        const savedAt = Date.parse(remoteItem.savedAt || '') || 0;
+        const deletedAt = Date.parse(tombstones[projectKey].deletedAt || '') || 0;
+        if (savedAt <= deletedAt) continue;
+      }
       let index = current.findIndex((item) => namedVersionIdentity(item, targetKey) === namedVersionIdentity(remoteItem, targetKey));
       // Legacy versions did not carry a stable project key. Match them by
       // drawing and version name once, then retain the newer snapshot.
