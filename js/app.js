@@ -86,6 +86,7 @@ const PROJECTS_FALLBACK_KEY = 'roof-tile-layout:projects:v1';
 const PROJECT_MAX_COUNT = 50;
 const BACKUP_SCHEMA_VERSION = 1;
 const DELETED_PROJECTS_KEY = 'roof-tile-layout:deleted-projects:v1';
+const DELETED_PROJECTS_SCHEMA = 2;
 const RECOVERY_SCHEMA_VERSION = 1;
 const RECOVERY_MAX_PER_PROJECT = 10;
 const RECOVERY_LOCAL_KEY = 'roof-tile-layout:recovery:v1';
@@ -987,21 +988,48 @@ function setSyncStatus(message, type = '') {
   dom.syncStatus.className = type ? `sync-status ${type}` : 'sync-status';
 }
 
-function readDeletedProjectTombstones() {
-  if (typeof localStorage === 'undefined') return {};
-  try {
-    const parsed = JSON.parse(localStorage.getItem(DELETED_PROJECTS_KEY) || '{}');
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
-  } catch (error) {
-    console.warn('Unable to read deleted project records', error);
-    return {};
-  }
+function deletedProjectScopeKey(syncKey = readSyncKey()) {
+  const key = String(syncKey || '').trim();
+  return key ? `sync:${key}` : 'local';
 }
 
-function writeDeletedProjectTombstones(tombstones) {
+function readDeletedProjectTombstoneStore() {
+  if (typeof localStorage === 'undefined') return { schema: DELETED_PROJECTS_SCHEMA, scopes: {} };
+  try {
+    const parsed = JSON.parse(localStorage.getItem(DELETED_PROJECTS_KEY) || '{}');
+    if (parsed?.schema === DELETED_PROJECTS_SCHEMA && parsed.scopes && typeof parsed.scopes === 'object') {
+      return parsed;
+    }
+    // Migrate the first-generation flat map into the currently selected
+    // workspace. Older builds did not distinguish sync-code workspaces.
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return {
+        schema: DELETED_PROJECTS_SCHEMA,
+        scopes: { [deletedProjectScopeKey()]: parsed }
+      };
+    }
+  } catch (error) {
+    console.warn('Unable to read deleted project records', error);
+  }
+  return { schema: DELETED_PROJECTS_SCHEMA, scopes: {} };
+}
+
+function readDeletedProjectTombstones(syncKey = readSyncKey()) {
+  const store = readDeletedProjectTombstoneStore();
+  const scope = deletedProjectScopeKey(syncKey);
+  const tombstones = store.scopes?.[scope];
+  return tombstones && typeof tombstones === 'object' && !Array.isArray(tombstones) ? tombstones : {};
+}
+
+function writeDeletedProjectTombstones(tombstones, syncKey = readSyncKey()) {
   if (typeof localStorage === 'undefined') return false;
   try {
-    localStorage.setItem(DELETED_PROJECTS_KEY, JSON.stringify(tombstones || {}));
+    const store = readDeletedProjectTombstoneStore();
+    const scope = deletedProjectScopeKey(syncKey);
+    store.schema = DELETED_PROJECTS_SCHEMA;
+    store.scopes = store.scopes && typeof store.scopes === 'object' ? store.scopes : {};
+    store.scopes[scope] = tombstones || {};
+    localStorage.setItem(DELETED_PROJECTS_KEY, JSON.stringify(store));
     return true;
   } catch (error) {
     console.warn('Unable to write deleted project records', error);
@@ -1009,8 +1037,8 @@ function writeDeletedProjectTombstones(tombstones) {
   }
 }
 
-function mergeDeletedProjectTombstones(remote = {}) {
-  const merged = readDeletedProjectTombstones();
+function mergeDeletedProjectTombstones(remote = {}, syncKey = readSyncKey()) {
+  const merged = readDeletedProjectTombstones(syncKey);
   for (const [key, value] of Object.entries(remote || {})) {
     if (!value || typeof value !== 'object') continue;
     const incomingAt = Date.parse(value.deletedAt || '') || 0;
@@ -1024,7 +1052,7 @@ function mergeDeletedProjectTombstones(remote = {}) {
       };
     }
   }
-  writeDeletedProjectTombstones(merged);
+  writeDeletedProjectTombstones(merged, syncKey);
   return merged;
 }
 
@@ -1336,7 +1364,7 @@ async function mergeRemoteSyncStateBeforeUpload(syncKey) {
   }
   const payload = result?.payload;
   if (!payload || payload.projectType !== 'roof-tile-layout-sync') return;
-  const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones);
+  const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones, syncKey);
   const remoteProjects = filterDeletedProjects(payload.projects, tombstones);
   if (payload.activeProjectId && payload.currentProject
     && !remoteProjects.some((item) => String(item?.id || '') === String(payload.activeProjectId))
@@ -1389,7 +1417,7 @@ async function downloadSync() {
     let project = payload?.currentProject;
     if (!project || project.projectType !== 'roof-tile-layout') throw new Error('雲端沒有可用的屋面佈局。');
     pushHistory();
-    const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones);
+    const tombstones = mergeDeletedProjectTombstones(payload.deletedProjectTombstones, syncKey);
     const remoteProjectRecords = filterDeletedProjects(payload.projects, tombstones);
     const activeCandidate = {
       id: payload.activeProjectId,
